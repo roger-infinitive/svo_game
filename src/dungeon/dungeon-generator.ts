@@ -1,10 +1,14 @@
-import { aStar } from "./a-star.ts";
+import { gridDistance, routeHallway, stairKey } from "./dungeon-routing.ts";
 import { chooseHallways, delaunayEdges, minimumSpanningTree } from "./room-graph.ts";
 import type { RoomEdge } from "./room-graph.ts";
 import {
   defaultDungeonSettings, gridKey, placeRooms, roomCenter, seededRandom, validateDungeonSettings,
 } from "./rooms.ts";
-import type { DungeonRoom, DungeonSettings, DungeonSize, GridPoint } from "./rooms.ts";
+import type { DungeonRoom, DungeonSettings, GridPoint } from "./rooms.ts";
+import { stairBetween, stairFootprint } from "./stairs.ts";
+import type { DungeonStair } from "./stairs.ts";
+
+export { addGridPoints, gridDirections, insideDungeon } from "./dungeon-routing.ts";
 
 export interface Dungeon {
   seed: number;
@@ -16,37 +20,13 @@ export interface Dungeon {
   roomSpace: Map<number, GridPoint>;
   walkable: Map<number, GridPoint>;
   verticalLinks: Set<number>;
+  stairs: DungeonStair[];
   entrance: GridPoint;
 }
 
 interface Portal {
   inside: GridPoint;
   outside: GridPoint;
-}
-
-export const gridDirections: GridPoint[] = [
-  { x: 1, y: 0, z: 0 },
-  { x: -1, y: 0, z: 0 },
-  { x: 0, y: 0, z: 1 },
-  { x: 0, y: 0, z: -1 },
-  { x: 0, y: 1, z: 0 },
-  { x: 0, y: -1, z: 0 },
-];
-
-export function addGridPoints(a: GridPoint, b: GridPoint): GridPoint {
-  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-}
-
-export function insideDungeon(point: GridPoint, size: DungeonSize): boolean {
-  return (
-    point.x >= 0 && point.x < size.width &&
-    point.z >= 0 && point.z < size.length &&
-    point.y >= 0 && point.y < size.floors
-  );
-}
-
-function distance(a: GridPoint, b: GridPoint): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z);
 }
 
 function* perimeterPortals(room: DungeonRoom, y: number, inset: number): Generator<Portal> {
@@ -75,7 +55,7 @@ function towerEntrancePenalty(portal: Portal, doors: GridPoint[]): number {
   for (const door of doors) {
     if (door.y === portal.inside.y) {
       penalty += 6;
-      if (distance(door, portal.inside) <= 1) {
+      if (gridDistance(door, portal.inside) <= 1) {
         penalty += 12;
       }
     }
@@ -107,6 +87,9 @@ export function generateDungeon(
   const walkable = new Map<number, GridPoint>();
   const verticalLinks = new Set<number>();
   const corridors = new Set<number>();
+  const stairCells = new Set<number>();
+  const stairs = new Map<string, DungeonStair>();
+  const routingGrid = { size: settings, roomSpace, corridors, verticalLinks, stairCells, stairs };
   const hallways: GridPoint[][] = [];
 
   for (const room of rooms) {
@@ -144,7 +127,7 @@ export function generateDungeon(
       const from = start.portal;
       const to = end.portal;
       const reused = start.reused + end.reused;
-      const score = distance(from.outside, to.outside) +
+      const score = gridDistance(from.outside, to.outside) +
         3 * Math.abs(from.outside.y - to.outside.y) - 2 * reused + start.penalty + end.penalty;
       return { start: from, end: to, reused, score };
     }));
@@ -152,28 +135,12 @@ export function generateDungeon(
 
     let path: GridPoint[] | undefined;
     let doors: [GridPoint, GridPoint] | undefined;
+    const preferStairs = settings.stairsPercent > 0 && random() * 100 < settings.stairsPercent;
     for (const { start, end } of pairs) {
-      path = aStar({
-        start: start.outside,
-        goal: end.outside,
-        key: keyFor,
-        heuristic: distance,
-        *neighbors(point) {
-          for (const direction of gridDirections) {
-            const node = addGridPoints(point, direction);
-            if (!insideDungeon(node, settings) || roomSpace.has(keyFor(node))) {
-              continue;
-            }
-            const reused = corridors.has(keyFor(node));
-            if (direction.y === 0) {
-              yield { node, cost: reused ? 1 : 3 };
-            } else {
-              const lower = direction.y > 0 ? point : node;
-              yield { node, cost: verticalLinks.has(keyFor(lower)) ? 2 : 10 };
-            }
-          }
-        },
-      });
+      path = routeHallway(routingGrid, start.outside, end.outside, preferStairs);
+      if (!path && settings.stairsPercent > 0) {
+        path = routeHallway(routingGrid, start.outside, end.outside, !preferStairs);
+      }
       if (path) {
         doors = [start.inside, end.inside];
         break;
@@ -194,8 +161,17 @@ export function generateDungeon(
       corridors.add(key);
       walkable.set(key, point);
       const previous = path[step - 1];
-      if (previous && point.y !== previous.y) {
+      if (!previous || point.y === previous.y) {
+        continue;
+      }
+      if (point.x === previous.x && point.z === previous.z) {
         verticalLinks.add(keyFor(point.y < previous.y ? point : previous));
+      } else {
+        const stair = stairBetween(previous, point);
+        stairs.set(stairKey(stair, settings), stair);
+        for (const { cell } of stairFootprint(stair)) {
+          stairCells.add(keyFor(cell));
+        }
       }
     }
     hallways.push([doors[0], ...path, doors[1]]);
@@ -228,6 +204,7 @@ export function generateDungeon(
   const entranceRoom = rooms.find(room => room.floor === 0 && room.floors === 1) ?? rooms[0];
   return {
     seed, settings, rooms, graph, tree, hallways, roomSpace, walkable, verticalLinks,
+    stairs: [...stairs.values()],
     entrance: roomCenter(entranceRoom),
   };
 }

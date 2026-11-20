@@ -16,6 +16,8 @@ Set the minimum and maximum tower heights in floors, or turn on **Full-height to
 
 Towers favor separate entrances on different floors. **Tower connection target** sets how many hallways they aim for, when nearby rooms and hallway loops are available. Set the target to **0** to turn off the preference.
 
+**Hallway stairs (%)** controls how often hallway routes try stairs first. Walk up or down stairs with **W A S D**. Ladders still appear in towers and where a stair run won't fit. Set the percentage to **0** for ladder-only floor connections.
+
 Larger layouts can take longer to build and need more memory. If the rooms won't fit, try a wider map, smaller rooms, or fewer rooms.
 
 Click the viewer and use **W A S D** to move one metre at a time. Floors are two metres apart. Use **Space** or **Shift** at a brown ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.

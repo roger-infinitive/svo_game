@@ -31,6 +31,7 @@ export interface DungeonSettings extends DungeonSize {
   maxTowerFloors: number;
   fullHeightTowers: boolean;
   towerConnections: number;
+  stairsPercent: number;
   loopPercent: number;
 }
 
@@ -46,6 +47,7 @@ export const defaultDungeonSettings: DungeonSettings = {
   maxTowerFloors: 2,
   fullHeightTowers: false,
   towerConnections: 5,
+  stairsPercent: 80,
   loopPercent: 12,
 };
 
@@ -60,6 +62,7 @@ export const dungeonSettingLimits = {
   minTowerFloors: [2],
   maxTowerFloors: [2],
   towerConnections: [0],
+  stairsPercent: [0, 100],
   loopPercent: [0, 100],
 } as const satisfies Record<Exclude<keyof DungeonSettings, "fullHeightTowers">, readonly [number, number?]>;
 

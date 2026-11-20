@@ -1,6 +1,8 @@
 import type { Dungeon } from "./dungeon-generator.ts";
 import { floorHeight, gridKey } from "./rooms.ts";
-import type { DungeonSize } from "./rooms.ts";
+import type { DungeonSize, GridPoint } from "./rooms.ts";
+import { stairFootprint, stairRun } from "./stairs.ts";
+import type { DungeonStair } from "./stairs.ts";
 
 export const voxelsPerMeter = 32;
 
@@ -98,27 +100,91 @@ function addLadder(chunk: Uint8Array) {
   }
 }
 
+interface StairColumn {
+  stair: DungeonStair;
+  step: number;
+}
+
+function addStairTreads(
+  chunk: Uint8Array,
+  { stair, step }: StairColumn,
+  dx: number,
+  dy: number,
+  dz: number,
+) {
+  const axisX = stair.dx !== 0;
+  const chunkAlong = (axisX ? dx : dz) * voxelsPerChunk;
+  const reversed = stair.dx < 0 || stair.dz < 0;
+  const rise = floorHeight * voxelsPerMeter / (2 * stairRun);
+  for (let u = 0; u < voxelsPerChunk; u++) {
+    const local = chunkAlong + u;
+    const along = reversed ? voxelsPerMeter - 1 - local : local;
+    const tread = 2 * (step - 1) + Math.floor(along / voxelsPerChunk);
+    const height = Math.min(voxelsPerChunk, (tread + 1) * rise - dy * voxelsPerChunk);
+    for (let y = 0; y < height; y++) {
+      for (let across = 0; across < voxelsPerChunk; across++) {
+        const index = axisX ? morton(u, y, across) : morton(across, y, u);
+        chunk[index] = 1;
+      }
+    }
+  }
+}
+
 function dungeonChunks(dungeon: Dungeon): Map<bigint, Uint8Array> {
   const { settings } = dungeon;
+  const cells = new Map([...dungeon.roomSpace, ...dungeon.walkable]);
+  const stairColumns = new Map<number, StairColumn>();
+  const keyFor = (point: GridPoint) => gridKey(point, settings);
+  for (const stair of dungeon.stairs) {
+    for (const { cell, step } of stairFootprint(stair)) {
+      const key = keyFor(cell);
+      cells.set(key, cell);
+      stairColumns.set(key, { stair, step });
+    }
+  }
 
-  function isAir(x: number, y: number, z: number): boolean {
-    const cell = {
+  function chunkCell(x: number, y: number, z: number): GridPoint {
+    return {
       x: Math.floor(x / chunksPerMeter),
       y: Math.floor(y / floorChunks),
       z: Math.floor(z / chunksPerMeter),
     };
+  }
+
+  function isAir(cell: GridPoint): boolean {
     if (cell.x < 0 || cell.x >= settings.width ||
         cell.y < 0 || cell.y >= settings.floors ||
         cell.z < 0 || cell.z >= settings.length) {
       return false;
     }
-    const key = gridKey(cell, settings);
-    return dungeon.roomSpace.has(key) || dungeon.walkable.has(key);
+    return cells.has(keyFor(cell));
   }
 
-  const cells = new Map([...dungeon.roomSpace, ...dungeon.walkable]);
+  function opensOntoLanding(column: StairColumn, from: GridPoint, toKey: number): boolean {
+    const { stair, step } = column;
+    return (step === 1 && from.y === stair.lower.y && toKey === keyFor(stair.lower)) ||
+      (step === stairRun && from.y === stair.upper.y && toKey === keyFor(stair.upper));
+  }
+
+  function sideIsOpen(cell: GridPoint, column: StairColumn | undefined, other: GridPoint): boolean {
+    if (!isAir(other)) {
+      return false;
+    }
+    const otherKey = keyFor(other);
+    const neighbor = stairColumns.get(otherKey);
+    if (column && neighbor) {
+      return column.stair === neighbor.stair;
+    }
+    if (column) {
+      return opensOntoLanding(column, cell, otherKey);
+    }
+    return !neighbor || opensOntoLanding(neighbor, other, keyFor(cell));
+  }
+
   const chunks = new Map<bigint, Uint8Array>();
   for (const cell of cells.values()) {
+    const cellKey = keyFor(cell);
+    const column = stairColumns.get(cellKey);
     for (let dy = 0; dy < floorChunks; dy++) {
       for (let dz = 0; dz < chunksPerMeter; dz++) {
         for (let dx = 0; dx < chunksPerMeter; dx++) {
@@ -128,17 +194,19 @@ function dungeonChunks(dungeon: Dungeon): Map<bigint, Uint8Array> {
 
           // An upper gallery keeps an open atrium and open climb cells.
           const galleryFloor = dy === 0 && cell.y > 0 &&
-            dungeon.walkable.has(gridKey(cell, settings)) &&
-            !dungeon.verticalLinks.has(gridKey({ ...cell, y: cell.y - 1 }, settings));
-          const floorFace = galleryFloor || !isAir(x, y - 1, z);
-          const ceilingFace = !isAir(x, y + 1, z);
-          const westFace = !isAir(x - 1, y, z);
-          const eastFace = !isAir(x + 1, y, z);
-          const northFace = !isAir(x, y, z - 1);
-          const southFace = !isAir(x, y, z + 1);
+            dungeon.walkable.has(cellKey) &&
+            !dungeon.verticalLinks.has(keyFor({ ...cell, y: cell.y - 1 }));
+          const floorFace = !column && (galleryFloor || !isAir(chunkCell(x, y - 1, z)));
+          const ceilingFace = !isAir(chunkCell(x, y + 1, z));
+          const westFace = !sideIsOpen(cell, column, chunkCell(x - 1, y, z));
+          const eastFace = !sideIsOpen(cell, column, chunkCell(x + 1, y, z));
+          const northFace = !sideIsOpen(cell, column, chunkCell(x, y, z - 1));
+          const southFace = !sideIsOpen(cell, column, chunkCell(x, y, z + 1));
+          const treads = column && cell.y === column.stair.lower.y;
           const hasLadder = dx === 1 && dz === 0 &&
-            dungeon.verticalLinks.has(gridKey(cell, settings));
-          if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace || hasLadder)) {
+            dungeon.verticalLinks.has(cellKey);
+          if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace ||
+                hasLadder || treads)) {
             continue;
           }
 
@@ -163,6 +231,13 @@ function dungeonChunks(dungeon: Dungeon): Map<bigint, Uint8Array> {
           }
           if (hasLadder) {
             addLadder(chunk);
+          }
+          if (treads) {
+            addStairTreads(chunk, column, dx, dy, dz);
+          }
+          // The stair's solid risers need only the chunks below the current tread.
+          if (!chunk.includes(1)) {
+            continue;
           }
           chunks.set(chunkMorton(x, y, z), chunk);
         }
