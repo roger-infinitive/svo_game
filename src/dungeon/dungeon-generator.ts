@@ -70,6 +70,19 @@ function portals(room: DungeonRoom): Portal[] {
   return result;
 }
 
+function towerEntrancePenalty(portal: Portal, doors: GridPoint[]): number {
+  let penalty = 0;
+  for (const door of doors) {
+    if (door.y === portal.inside.y) {
+      penalty += 6;
+      if (distance(door, portal.inside) <= 1) {
+        penalty += 12;
+      }
+    }
+  }
+  return penalty;
+}
+
 export function generateDungeon(
   seed: number,
   settings: DungeonSettings = defaultDungeonSettings,
@@ -87,7 +100,9 @@ export function generateDungeon(
   const keyFor = (point: GridPoint) => gridKey(point, settings);
   const graph = delaunayEdges(rooms, settings);
   const tree = minimumSpanningTree(rooms.length, graph);
-  const connections = chooseHallways(graph, tree, random, settings.loopPercent);
+  const connections = chooseHallways(
+    rooms, graph, tree, random, settings.loopPercent, settings.towerConnections,
+  );
   const roomSpace = new Map<number, GridPoint>();
   const walkable = new Map<number, GridPoint>();
   const verticalLinks = new Set<number>();
@@ -110,16 +125,28 @@ export function generateDungeon(
   }
 
   const roomPortals = rooms.map(portals);
+  const towerDoors = rooms.map(() => [] as GridPoint[]);
   for (const [index, edge] of connections.entries()) {
     const addLoop = index >= tree.length;
-    const startChoices = roomPortals[edge.a];
-    const endChoices = roomPortals[edge.b];
+    const startTower = settings.towerConnections > 0 && rooms[edge.a].floors > 1;
+    const endTower = settings.towerConnections > 0 && rooms[edge.b].floors > 1;
+    const startChoices = roomPortals[edge.a].map(portal => ({
+      portal,
+      penalty: startTower ? towerEntrancePenalty(portal, towerDoors[edge.a]) : 0,
+      reused: Number(corridors.has(keyFor(portal.outside))),
+    }));
+    const endChoices = roomPortals[edge.b].map(portal => ({
+      portal,
+      penalty: endTower ? towerEntrancePenalty(portal, towerDoors[edge.b]) : 0,
+      reused: Number(corridors.has(keyFor(portal.outside))),
+    }));
     const pairs = startChoices.flatMap(start => endChoices.map(end => {
-      const reused = Number(corridors.has(keyFor(start.outside))) +
-        Number(corridors.has(keyFor(end.outside)));
-      const score = distance(start.outside, end.outside) +
-        3 * Math.abs(start.outside.y - end.outside.y) - 2 * reused;
-      return { start, end, reused, score };
+      const from = start.portal;
+      const to = end.portal;
+      const reused = start.reused + end.reused;
+      const score = distance(from.outside, to.outside) +
+        3 * Math.abs(from.outside.y - to.outside.y) - 2 * reused + start.penalty + end.penalty;
+      return { start: from, end: to, reused, score };
     }));
     pairs.sort((a, b) => (addLoop ? a.reused - b.reused : 0) || a.score - b.score);
 
@@ -154,6 +181,12 @@ export function generateDungeon(
     }
     if (!path || !doors) {
       throw new Error(`Could not carve a hallway between rooms ${edge.a + 1} and ${edge.b + 1}.`);
+    }
+    if (startTower) {
+      towerDoors[edge.a].push(doors[0]);
+    }
+    if (endTower) {
+      towerDoors[edge.b].push(doors[1]);
     }
 
     for (const [step, point] of path.entries()) {

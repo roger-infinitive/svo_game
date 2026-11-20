@@ -173,17 +173,53 @@ export function minimumSpanningTree(roomCount: number, edges: RoomEdge[]): RoomE
 }
 
 export function chooseHallways(
+  rooms: DungeonRoom[],
   edges: RoomEdge[],
   tree: RoomEdge[],
   random: () => number,
   loopPercent: number,
+  towerConnections: number,
 ): RoomEdge[] {
+  if (loopPercent === 0) {
+    return [...tree];
+  }
+
   const included = new Set(tree);
+  const connections = [...tree];
+
+  for (const [towerIndex, tower] of rooms.entries()) {
+    if (tower.floors === 1 || towerConnections === 0) {
+      continue;
+    }
+    const incident = edges.filter(edge => edge.a === towerIndex || edge.b === towerIndex);
+    const connected = incident.filter(edge => included.has(edge));
+    const approachFloor = (edge: RoomEdge) => {
+      const other = rooms[edge.a === towerIndex ? edge.b : edge.a];
+      return Math.max(tower.floor, Math.min(tower.floor + tower.floors - 1, other.floor));
+    };
+    const usedFloors = new Set(connected.map(approachFloor));
+    const candidates = incident.filter(edge => !included.has(edge));
+    let degree = connected.length;
+
+    // Favor nearby rooms approaching levels the tower does not serve yet.
+    while (degree < towerConnections && candidates.length > 0) {
+      candidates.sort((a, b) =>
+        Number(usedFloors.has(approachFloor(a))) - Number(usedFloors.has(approachFloor(b))) ||
+        a.distance - b.distance,
+      );
+      const edge = candidates.shift()!;
+      included.add(edge);
+      connections.push(edge);
+      usedFloors.add(approachFloor(edge));
+      degree++;
+    }
+  }
+
   const candidates = edges.filter(edge => !included.has(edge));
   const cycles = candidates.filter(() => random() * 100 < loopPercent);
-  if (loopPercent > 0 && cycles.length === 0 && candidates.length > 0) {
+  if (connections.length === tree.length && cycles.length === 0 && candidates.length > 0) {
     cycles.push(candidates[Math.floor(random() * candidates.length)]);
   }
-  return [...tree, ...cycles];
+  return [...connections, ...cycles];
 }
 
