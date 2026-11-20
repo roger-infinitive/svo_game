@@ -7,6 +7,13 @@ const routes = new Map([
   ["/style.css", ["style.css", "text/css"]],
   ["/src/main.ts", ["src/main.ts", "text/javascript"]],
   ["/src/rsvo.ts", ["src/rsvo.ts", "text/javascript"]],
+  ["/src/dungeon/a-star.ts", ["src/dungeon/a-star.ts", "text/javascript"]],
+  ["/src/dungeon/rooms.ts", ["src/dungeon/rooms.ts", "text/javascript"]],
+  ["/src/dungeon/room-graph.ts", ["src/dungeon/room-graph.ts", "text/javascript"]],
+  ["/src/dungeon/dungeon-generator.ts", ["src/dungeon/dungeon-generator.ts", "text/javascript"]],
+  ["/src/dungeon/dungeon-voxels.ts", ["src/dungeon/dungeon-voxels.ts", "text/javascript"]],
+  ["/src/dungeon/dungeon-walk.ts", ["src/dungeon/dungeon-walk.ts", "text/javascript"]],
+  ["/src/dungeon/dungeon-worker.ts", ["src/dungeon/dungeon-worker.ts", "text/javascript"]],
   ["/src/raycast.wgsl", ["src/raycast.wgsl", "text/plain"]],
 ]);
 

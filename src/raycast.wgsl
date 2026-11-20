@@ -4,6 +4,7 @@ struct Camera {
   right: vec4f,
   up: vec4f,
   viewport: vec4f,
+  scene: vec4f,
 }
 
 struct Frame {
@@ -157,6 +158,30 @@ fn raycast(origin: vec3f, direction: vec3f, start: f32) -> Hit {
   return vec4f(array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3))[i], 0, 1);
 }
 
+fn dungeonColor(hit: Hit, origin: vec3f, direction: vec3f) -> vec3f {
+  let meterScale = camera.scene.x;
+  let surface = origin + direction * hit.t - hit.normal * (meterScale / 512.0);
+  let voxel = surface * (16.0 / meterScale);
+  var face = voxel.xy;
+  if (abs(hit.normal.x) > 0.5) {
+    face = voxel.zy;
+  } else if (abs(hit.normal.y) > 0.5) {
+    face = voxel.xz;
+  }
+
+  let row = floor(face.y / 4.0);
+  let offset = 8.0 * fract(row * 0.5);
+  let column = floor((face.x + offset) / 8.0);
+  let mortar = fract(face.y / 4.0) < 0.25 || fract((face.x + offset) / 8.0) < 0.125;
+  let variation = fract(column * 0.618 + row * 0.413);
+  let brick = mix(vec3f(0.50, 0.23, 0.14), vec3f(0.77, 0.43, 0.28), variation);
+  let material = select(brick, vec3f(0.29, 0.25, 0.22), mortar);
+  let distance = length(direction) * hit.t / meterScale;
+  let falloff = 1.0 / (1.0 + 0.021 * distance * distance);
+  let facing = max(0.0, dot(hit.normal, -normalize(direction)));
+  return material * (0.28 + falloff * (0.23 + 0.55 * facing));
+}
+
 @fragment fn fragment(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   let ndc = pixel.xy / camera.viewport.xy * vec2f(2, -2) + vec2f(-1, 1);
   let direction = camera.forward.xyz
@@ -166,6 +191,9 @@ fn raycast(origin: vec3f, direction: vec3f, start: f32) -> Hit {
   if (hit.t < 0.0) {
     return vec4f(0.07, 0.08, 0.1, 1);
   }
+  if (camera.scene.x > 0.0) {
+    return vec4f(dungeonColor(hit, camera.positionAndLod.xyz, direction), 1);
+  }
   return vec4f(0.5 * (hit.normal + 1.0), 1);
 }
 
@@ -173,7 +201,7 @@ fn raycast(origin: vec3f, direction: vec3f, start: f32) -> Hit {
 fn shootRay() {
   let origin = camera.positionAndLod.xyz;
   let direction = camera.forward.xyz;
-  let rayLength = 12.0;
+  let rayLength = 12.0 * select(1.0, camera.scene.x, camera.scene.x > 0.0);
   traceOutput.start = vec4f(origin, 1.0);
   traceOutput.end = vec4f(origin + direction * rayLength, 1.0);
 

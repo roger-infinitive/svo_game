@@ -1,9 +1,17 @@
 import { parseRsvo, sampleRsvo } from "./rsvo.ts";
 import type { Octree } from "./rsvo.ts";
+import type { Dungeon } from "./dungeon/dungeon-generator.ts";
+import { dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
+import { climbDirections, moveInDungeon } from "./dungeon/dungeon-walk.ts";
+import { floorHeight } from "./dungeon/rooms.ts";
+import type { GridPoint } from "./dungeon/rooms.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#view")!;
 const status = document.querySelector<HTMLOutputElement>("#status")!;
 const file = document.querySelector<HTMLInputElement>("#file")!;
+const seedInput = document.querySelector<HTMLInputElement>("#dungeon-seed")!;
+const generate = document.querySelector<HTMLButtonElement>("#generate-dungeon")!;
+const exportDungeon = document.querySelector<HTMLButtonElement>("#export-dungeon")!;
 const depth = document.querySelector<HTMLInputElement>("#depth")!;
 const level = document.querySelector<HTMLOutputElement>("#level")!;
 const lod = document.querySelector<HTMLInputElement>("#lod")!;
@@ -109,7 +117,7 @@ async function start() {
       primitive: { topology: "line-list" },
     }),
   ]);
-  const uniforms = new Float32Array(20);
+  const uniforms = new Float32Array(24);
   const cameraBuffer = device.createBuffer({
     size: uniforms.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -125,6 +133,31 @@ async function start() {
   let modelEntries: GPUBindGroupEntry[] = [];
   const pendingTraces: { camera: Float32Array; depth: number }[] = [];
   const savedTraces: { buffer: GPUBuffer; group: GPUBindGroup }[] = [];
+  let dungeon: Dungeon | undefined;
+  let dungeonBytes: ArrayBuffer | undefined;
+  let player: GridPoint = { x: 0, y: 0, z: 0 };
+  let stepCooldown = 0;
+
+  function placeDungeonCamera() {
+    if (!dungeon) {
+      resetCamera();
+      return;
+    }
+    player = { ...dungeon.entrance, y: dungeon.entrance.y * floorHeight };
+    yaw = 0;
+    pitch = 0;
+    stepCooldown = 0;
+    syncDungeonCamera(dungeon);
+    dirty = true;
+  }
+
+  function syncDungeonCamera(layout: Dungeon) {
+    position[0] = (player.x + 0.5) * dungeonWorldScale;
+    position[1] = (player.y + 1.6) * dungeonWorldScale;
+    position[2] = (player.z + 0.5) * dungeonWorldScale;
+    const floor = 1 + Math.floor(player.y / floorHeight);
+    status.value = `Dungeon ${layout.seed} · Floor ${floor}` + climbDirections(layout, player);
+  }
 
   function requestTrace() {
     updateCamera(0);
@@ -205,9 +238,51 @@ async function start() {
   upload(sample);
   status.value = "Sample torus";
   file.disabled = false;
+  generate.disabled = false;
   shoot.disabled = false;
   shoot.addEventListener("click", requestTrace);
   clearRay.addEventListener("click", clearTraces);
+
+  generate.addEventListener("click", async () => {
+    if (!seedInput.reportValidity()) {
+      return;
+    }
+    const seed = seedInput.value === ""
+      ? crypto.getRandomValues(new Uint32Array(1))[0]
+      : Number(seedInput.value);
+    generate.disabled = true;
+    file.disabled = true;
+    status.value = "Generating dungeon…";
+    try {
+      const generated = await buildDungeon(seed);
+      const tree = parseRsvo(generated.buffer);
+      upload(tree);
+      dungeon = generated.dungeon;
+      dungeonBytes = generated.buffer;
+      depth.value = String(tree.depth);
+      level.value = depth.value;
+      seedInput.value = String(seed);
+      exportDungeon.disabled = false;
+      placeDungeonCamera();
+    } catch (error) {
+      status.value = String(error);
+    } finally {
+      generate.disabled = false;
+      file.disabled = false;
+    }
+  });
+
+  exportDungeon.addEventListener("click", () => {
+    if (!dungeon || !dungeonBytes) {
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([dungeonBytes], { type: "application/octet-stream" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `dungeon-${dungeon.seed}.rsvo`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
 
   file.addEventListener("change", async () => {
     const model = file.files?.[0];
@@ -215,9 +290,13 @@ async function start() {
       return;
     }
     file.disabled = true;
+    generate.disabled = true;
     status.value = "Loading " + model.name + "…";
     try {
       upload(parseRsvo(await model.arrayBuffer()));
+      dungeon = undefined;
+      dungeonBytes = undefined;
+      exportDungeon.disabled = true;
       resetCamera();
       status.value = model.name;
     } catch (error) {
@@ -225,6 +304,7 @@ async function start() {
     } finally {
       file.value = "";
       file.disabled = false;
+      generate.disabled = false;
     }
   });
 
@@ -239,7 +319,7 @@ async function start() {
   resolution.addEventListener("change", () => {
     dirty = true;
   });
-  reset.addEventListener("click", resetCamera);
+  reset.addEventListener("click", placeDungeonCamera);
   new ResizeObserver(() => {
     dirty = true;
   }).observe(canvas);
@@ -264,6 +344,9 @@ async function start() {
   });
   window.addEventListener("keyup", event => {
     keys.delete(event.code);
+    if (keys.size === 0) {
+      stepCooldown = 0;
+    }
   });
   document.addEventListener("pointerlockchange", () => {
     keys.clear();
@@ -289,10 +372,29 @@ async function start() {
     const side = Number(keys.has("KeyD")) - Number(keys.has("KeyA"));
     const vertical = Number(keys.has("Space")) -
       Number(keys.has("ShiftLeft") || keys.has("ShiftRight"));
-    const step = 4 * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
-    position[0] += (forward * sinYaw * cosPitch + side * cosYaw) * step;
-    position[1] += (forward * sinPitch + vertical) * step;
-    position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
+    if (dungeon) {
+      stepCooldown = Math.max(0, stepCooldown - deltaSeconds);
+      if (deltaSeconds > 0 && stepCooldown === 0 && (forward || side || vertical)) {
+        const facingX = Math.abs(sinYaw) > Math.abs(cosYaw) ? Math.sign(sinYaw) : 0;
+        const facingZ = facingX === 0 ? Math.sign(cosYaw) : 0;
+        const direction = vertical
+          ? { x: 0, y: vertical, z: 0 }
+          : forward
+            ? { x: forward * facingX, y: 0, z: forward * facingZ }
+            : { x: side * facingZ, y: 0, z: -side * facingX };
+        const next = moveInDungeon(dungeon, player, direction);
+        if (next !== player) {
+          player = next;
+          syncDungeonCamera(dungeon);
+        }
+        stepCooldown = 0.16;
+      }
+    } else {
+      const step = 4 * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
+      position[0] += (forward * sinYaw * cosPitch + side * cosYaw) * step;
+      position[1] += (forward * sinPitch + vertical) * step;
+      position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
+    }
 
     // The first vec4 stores the camera position and the LOD threshold.
     uniforms.set(position, 0);
@@ -342,6 +444,7 @@ async function start() {
     uniforms[17] = height;
     uniforms[18] = displayWidth / displayHeight;
     uniforms[19] = Number(depth.value);
+    uniforms[20] = dungeon ? dungeonWorldScale : 0;
     uniforms[3] = Number(lod.value);
     device.queue.writeBuffer(cameraBuffer, 0, uniforms);
 
@@ -458,6 +561,23 @@ async function start() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+}
+
+function buildDungeon(seed: number): Promise<{ dungeon: Dungeon; buffer: ArrayBuffer }> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./dungeon/dungeon-worker.ts", import.meta.url), {
+      type: "module",
+    });
+    worker.onmessage = event => {
+      worker.terminate();
+      resolve(event.data);
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message || "Dungeon generation failed."));
+    };
+    worker.postMessage(seed);
+  });
 }
 
 function createGpuTimer(device: GPUDevice) {

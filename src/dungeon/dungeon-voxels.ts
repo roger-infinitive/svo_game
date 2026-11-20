@@ -54,6 +54,19 @@ function lineWithBricks(
   }
 }
 
+function addLadder(chunk: Uint8Array) {
+  // Leave the centre of the climb cell open.
+  for (let y = 0; y < voxelsPerMeter; y++) {
+    chunk[morton(3, y, 3)] = 1;
+    chunk[morton(11, y, 3)] = 1;
+    if (y % 8 === 4) {
+      for (let x = 4; x < 11; x++) {
+        chunk[morton(x, y, 3)] = 1;
+      }
+    }
+  }
+}
+
 function dungeonChunks(dungeon: Dungeon): Map<number, Uint8Array> {
   const air = new Uint8Array(dungeonWidth * meterHeight * dungeonLength);
   for (const { x, y, z } of [...dungeon.roomSpace.values(), ...dungeon.walkable.values()]) {
@@ -90,7 +103,8 @@ function dungeonChunks(dungeon: Dungeon): Map<number, Uint8Array> {
         const eastFace = !isAir(x + 1, y, z);
         const northFace = !isAir(x, y, z - 1);
         const southFace = !isAir(x, y, z + 1);
-        if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace)) {
+        const hasLadder = dungeon.verticalLinks.has(gridKey({ x, y: Math.floor(floor), z }));
+        if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace || hasLadder)) {
           continue;
         }
 
@@ -112,6 +126,9 @@ function dungeonChunks(dungeon: Dungeon): Map<number, Uint8Array> {
         }
         if (southFace) {
           lineWithBricks(chunk, "z", true, x, y);
+        }
+        if (hasLadder) {
+          addLadder(chunk);
         }
         chunks.set(morton(x, y, z), chunk);
       }

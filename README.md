@@ -8,6 +8,14 @@ Explore voxel models in your browser. The viewer starts with a sample torus and 
 2. Open the URL it prints in a browser that supports WebGPU.
 3. To try the included model, choose **Open RSVO** and select `data/render_me.rsvo`.
 
+## Generate a dungeon
+
+Click **Generate dungeon**. Leave **Seed** empty for a random layout or enter a number to repeat a layout. Rooms and hallways are built across three floors. Some rooms have an open centre with a gallery above.
+
+Click the viewer and use **W A S D** to move one metre at a time. Use **Space** or **Shift** at a ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.
+
+Click **Export RSVO** to save the dungeon's voxel geometry. Use the same seed to get the walkable layout back in the viewer.
+
 ## Controls
 
 | Control | Action |

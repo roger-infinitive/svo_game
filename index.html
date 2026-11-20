@@ -14,6 +14,12 @@
       <input id="file" type="file" accept=".rsvo" disabled>
     </label>
     <label>
+      Seed
+      <input id="dungeon-seed" type="number" min="0" max="4294967295" step="1" placeholder="Random">
+    </label>
+    <button id="generate-dungeon" disabled>Generate dungeon</button>
+    <button id="export-dungeon" disabled>Export RSVO</button>
+    <label>
       Depth
       <input id="depth" type="range" min="1" max="8" value="6">
       <output id="level">6</output>
