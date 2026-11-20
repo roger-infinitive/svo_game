@@ -7,3 +7,4 @@ coverage/
 .env.*
 !.env.example
 *.rsvo
+!/data/render_me.rsvo

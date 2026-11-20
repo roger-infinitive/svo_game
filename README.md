@@ -1,23 +1,30 @@
 # SVO Raycaster
 
-A TypeScript and WebGPU port of the native DirectX 11 sparse voxel raycaster. It reads RSVO version 1 files and renders voxel face normals. A generated torus is included so the viewer opens without a model download.
+Explore voxel models in your browser. The viewer starts with a sample torus and can open RSVO files.
 
-## Run locally
+## Get started
 
-With Node.js 24 or newer, run `node serve.mjs` from this directory and open the URL it prints in a browser with WebGPU enabled. The server uses port 5173 by default and picks an available port if 5173 is busy. Set the `PORT` environment variable to require a specific port.
+1. With Node.js 24 or newer installed, run `node serve.mjs` from this folder.
+2. Open the URL it prints in a browser that supports WebGPU.
+3. To try the included model, choose **Open RSVO** and select `data/render_me.rsvo`.
 
-The local server strips TypeScript annotations as it serves the modules and requires no package install. To check the TypeScript types, run `npm install` followed by `npm run typecheck`.
+## Controls
 
-Choose **Open RSVO** to load a model, including `data/render_me.rsvo` from the native project. The browser reads the file locally. Click the canvas to look around, use WASD to fly, Space and Shift to move vertically, and Escape to release the mouse.
+| Control | Action |
+| --- | --- |
+| Click the viewer | Look around with the mouse |
+| **W A S D** | Fly forward, left, back, and right |
+| **Space / Shift** | Fly up or down |
+| **Esc** | Release the mouse |
+| **R** | Shoot a debug ray and outline the cells it crosses |
+| **C** | Clear all debug rays |
 
-## Rendering performance
+Each debug ray stays in place as you move. Fly sideways to see it from an angle.
 
-- TypeScript validates the tree and builds a flat child-offset table at import. The GPU receives packed 8-bit masks and 32-bit offsets, about five bytes per internal node before buffer padding. The offset table is split across two bindings so the original 47 MB RSVO fits within a 128 MiB per-binding limit.
-- A fullscreen WebGPU pass traverses the tree directly and writes to the canvas. Each frame updates only an 80-byte camera uniform. The renderer submits work when the view changes.
-- **Native** is the default and renders at the display's pixel density, subject to the GPU texture size limit. **Auto** caps rendering at roughly 921,600 pixels and avoids high-DPI supersampling. Decrease **Depth** to stop traversal earlier. The renderer keeps one GPU frame in flight so camera movement does not queue stale frames. The footer counts completed frames during interaction.
-- **640 × 360 (fixed)** traces 230,400 rays per frame at any window size. The browser scales the output to fill the viewer.
-- **LOD pixels** stops traversal when an occupied cell projects below the threshold at the current render resolution. It defaults to **1.125**. Set it to **0** to use the **Depth** cap alone.
+## Detail and speed
 
-Append `?profile=1` to the viewer URL to show sampled GPU render-pass time in milliseconds on adapters that support timestamp queries. Move the camera to generate samples. The timing covers the WebGPU render pass, including ray traversal and shading.
+- **Resolution** controls how sharp the image is. Choose **Native** for full detail or **Auto** or **640 × 360 (fixed)** for less GPU work.
+- **Depth** controls how small the visible voxel cells can get. Lower it for a coarser view.
+- **LOD pixels** lets distant cells use less detail when they appear small on screen. Set it to **0** to turn this off.
 
-Press **R** while looking around or click **Shoot ray** to capture a 12-unit ray from the camera. Each shot traces once using the rendering shader's traversal and saves up to 64 occupied cells. The overlay keeps every shot until you press **C**, click **Clear rays**, or load another model. The first occupied cell of each ray is green. Move sideways to view the rays from an angle.
+To see how long the GPU takes to draw a frame, add `?profile=1` to the viewer URL and move the camera. The footer shows the render time if your GPU supports timing.
