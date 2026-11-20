@@ -49,23 +49,23 @@ function distance(a: GridPoint, b: GridPoint): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z);
 }
 
+function* perimeterPortals(room: DungeonRoom, y: number, inset: number): Generator<Portal> {
+  const farX = room.x + room.width - 1;
+  const farZ = room.z + room.length - 1;
+  for (let x = room.x + inset; x <= farX - inset; x++) {
+    yield { inside: { x, y, z: room.z }, outside: { x, y, z: room.z - 1 } };
+    yield { inside: { x, y, z: farZ }, outside: { x, y, z: farZ + 1 } };
+  }
+  for (let z = room.z + inset; z <= farZ - inset; z++) {
+    yield { inside: { x: room.x, y, z }, outside: { x: room.x - 1, y, z } };
+    yield { inside: { x: farX, y, z }, outside: { x: farX + 1, y, z } };
+  }
+}
+
 function portals(room: DungeonRoom): Portal[] {
   const result: Portal[] = [];
   for (let y = room.floor; y < room.floor + room.floors; y++) {
-    for (let x = room.x + 1; x < room.x + room.width - 1; x++) {
-      const far = room.z + room.length - 1;
-      result.push(
-        { inside: { x, y, z: room.z }, outside: { x, y, z: room.z - 1 } },
-        { inside: { x, y, z: far }, outside: { x, y, z: far + 1 } },
-      );
-    }
-    for (let z = room.z + 1; z < room.z + room.length - 1; z++) {
-      const far = room.x + room.width - 1;
-      result.push(
-        { inside: { x: room.x, y, z }, outside: { x: room.x - 1, y, z } },
-        { inside: { x: far, y, z }, outside: { x: far + 1, y, z } },
-      );
-    }
+    result.push(...perimeterPortals(room, y, 1));
   }
   return result;
 }
@@ -101,15 +101,10 @@ export function generateDungeon(
           const point = { x, y, z };
           const key = keyFor(point);
           roomSpace.set(key, point);
-          const alongWall = x === room.x || x === room.x + room.width - 1 ||
-            z === room.z || z === room.z + room.length - 1;
-          if (y === room.floor || alongWall) {
+          if (y === room.floor) {
             walkable.set(key, point);
           }
         }
-      }
-      if (y < room.floor + room.floors - 1) {
-        verticalLinks.add(keyFor({ x: room.x, y, z: room.z }));
       }
     }
   }
@@ -171,6 +166,30 @@ export function generateDungeon(
       }
     }
     hallways.push([doors[0], ...path, doors[1]]);
+  }
+
+  // Check the hallways that were actually carved, including incidental
+  // openings where a corridor passes alongside a tower.
+  for (const room of rooms) {
+    let highestGallery = room.floor;
+    for (let y = room.floor + 1; y < room.floor + room.floors; y++) {
+      const perimeter = [...perimeterPortals(room, y, 0)];
+      if (!perimeter.some(({ outside }) => corridors.has(keyFor(outside)))) {
+        continue;
+      }
+      for (const { inside } of perimeter) {
+        walkable.set(keyFor(inside), inside);
+      }
+      highestGallery = y;
+    }
+
+    // A ladder can pass through an open level to reach a connected gallery.
+    for (let y = room.floor; y < highestGallery; y++) {
+      const ladder = { x: room.x, y, z: room.z };
+      const above = { ...ladder, y: y + 1 };
+      verticalLinks.add(keyFor(ladder));
+      walkable.set(keyFor(above), above);
+    }
   }
 
   const entranceRoom = rooms.find(room => room.floor === 0 && room.floors === 1) ?? rooms[0];
