@@ -24,6 +24,7 @@ export interface DungeonSize {
 
 export interface DungeonSettings extends DungeonSize {
   roomCount: number;
+  overlappingRooms: boolean;
   minRoomSize: number;
   maxRoomSize: number;
   towerPercent: number;
@@ -40,6 +41,7 @@ export const defaultDungeonSettings: DungeonSettings = {
   length: 48,
   floors: 3,
   roomCount: 15,
+  overlappingRooms: false,
   minRoomSize: 6,
   maxRoomSize: 9,
   towerPercent: 22,
@@ -64,7 +66,10 @@ export const dungeonSettingLimits = {
   towerConnections: [0],
   stairsPercent: [0, 100],
   loopPercent: [0, 100],
-} as const satisfies Record<Exclude<keyof DungeonSettings, "fullHeightTowers">, readonly [number, number?]>;
+} as const satisfies Record<
+  Exclude<keyof DungeonSettings, "fullHeightTowers" | "overlappingRooms">,
+  readonly [number, number?]
+>;
 
 export function validateDungeonSettings(settings: DungeonSettings) {
   for (const key of Object.keys(dungeonSettingLimits) as (keyof typeof dungeonSettingLimits)[]) {
@@ -123,6 +128,14 @@ function separated(a: DungeonRoom, b: DungeonRoom): boolean {
   );
 }
 
+export function roomsOverlap(a: DungeonRoom, b: DungeonRoom): boolean {
+  return (
+    a.floors === 1 && b.floors === 1 && a.floor === b.floor &&
+    a.x < b.x + b.width && b.x < a.x + a.width &&
+    a.z < b.z + b.length && b.z < a.z + a.length
+  );
+}
+
 export function placeRooms(random: () => number, settings: DungeonSettings): DungeonRoom[] {
   const rooms: DungeonRoom[] = [];
   const randomInt = (limit: number) => Math.floor(random() * limit);
@@ -165,7 +178,17 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
         floors: roomFloors,
       };
 
-      if (rooms.every(other => separated(room, other))) {
+      const center = roomCenter(room);
+      if (rooms.every(other => {
+        if (separated(room, other)) {
+          return true;
+        }
+        if (!settings.overlappingRooms || !roomsOverlap(room, other)) {
+          return false;
+        }
+        const otherCenter = roomCenter(other);
+        return center.x !== otherCenter.x || center.z !== otherCenter.z;
+      })) {
         rooms.push(room);
         break;
       }

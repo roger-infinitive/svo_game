@@ -20,6 +20,8 @@ Towers favor separate entrances on different floors. **Tower connection target**
 
 Larger layouts can take longer to build and need more memory. If the rooms won't fit, try a wider map, smaller rooms, or fewer rooms.
 
+Turn on **Allow overlapping rooms** to merge same-floor rooms into larger spaces. Towers keep their own footprints so their shafts and galleries stay open.
+
 Click the viewer and use **W A S D** to move one metre at a time. Floors are two metres apart. Use **Space** or **Shift** at a brown ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.
 
 Press **F** or click **Fly** to move freely through walls and between floors. Switch back to **Walk** to return to your last grid position.

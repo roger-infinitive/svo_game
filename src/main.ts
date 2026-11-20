@@ -19,6 +19,7 @@ const settingsForm = document.querySelector<HTMLFormElement>("#dungeon-settings-
 const settingsCancel = document.querySelector<HTMLButtonElement>("#dungeon-settings-cancel")!;
 const settingsError = document.querySelector<HTMLOutputElement>("#dungeon-settings-error")!;
 const fullHeightTowers = document.querySelector<HTMLInputElement>("#full-height-towers")!;
+const overlappingRooms = document.querySelector<HTMLInputElement>("#overlapping-rooms")!;
 const generate = document.querySelector<HTMLButtonElement>("#generate-dungeon")!;
 const exportDungeon = document.querySelector<HTMLButtonElement>("#export-dungeon")!;
 const dungeonFlight = document.querySelector<HTMLButtonElement>("#dungeon-flight")!;
@@ -69,6 +70,7 @@ const settingFields = settingKeys.map(key => {
 settingsButton.addEventListener("click", () => {
   seedInput.value = dungeonSeed === undefined ? "" : String(dungeonSeed);
   fullHeightTowers.checked = dungeonSettings.fullHeightTowers;
+  overlappingRooms.checked = dungeonSettings.overlappingRooms;
   for (const { key, input } of settingFields) {
     input.value = String(dungeonSettings[key]);
   }
@@ -82,6 +84,7 @@ settingsForm.addEventListener("submit", event => {
   event.preventDefault();
   const next = { ...dungeonSettings };
   next.fullHeightTowers = fullHeightTowers.checked;
+  next.overlappingRooms = overlappingRooms.checked;
   for (const { key, input } of settingFields) {
     next[key] = input.valueAsNumber;
   }

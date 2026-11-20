@@ -2,7 +2,8 @@ import { gridDistance, routeHallway, stairKey } from "./dungeon-routing.ts";
 import { chooseHallways, delaunayEdges, minimumSpanningTree } from "./room-graph.ts";
 import type { RoomEdge } from "./room-graph.ts";
 import {
-  defaultDungeonSettings, gridKey, placeRooms, roomCenter, seededRandom, validateDungeonSettings,
+  defaultDungeonSettings, gridKey, placeRooms, roomCenter, roomsOverlap, seededRandom,
+  validateDungeonSettings,
 } from "./rooms.ts";
 import type { DungeonRoom, DungeonSettings, GridPoint } from "./rooms.ts";
 import { stairBetween, stairFootprint } from "./stairs.ts";
@@ -63,6 +64,29 @@ function towerEntrancePenalty(portal: Portal, doors: GridPoint[]): number {
   return penalty;
 }
 
+function roomClusters(rooms: DungeonRoom[], overlapsAllowed: boolean): number[] {
+  const parents = rooms.map((_, index) => index);
+  if (!overlapsAllowed) {
+    return parents;
+  }
+
+  function root(index: number): number {
+    while (parents[index] !== index) {
+      index = parents[index];
+    }
+    return index;
+  }
+
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (roomsOverlap(rooms[i], rooms[j])) {
+        parents[root(i)] = root(j);
+      }
+    }
+  }
+  return parents.map((_, index) => root(index));
+}
+
 export function generateDungeon(
   seed: number,
   settings: DungeonSettings = defaultDungeonSettings,
@@ -107,9 +131,25 @@ export function generateDungeon(
     }
   }
 
-  const roomPortals = rooms.map(portals);
+  const clusters = roomClusters(rooms, settings.overlappingRooms);
+  const clusterPortals = new Map<number, Map<string, Portal>>();
+  for (const [index, room] of rooms.entries()) {
+    const cluster = clusters[index];
+    const exterior = clusterPortals.get(cluster) ?? new Map<string, Portal>();
+    for (const portal of portals(room)) {
+      const outsideKey = keyFor(portal.outside);
+      if (!roomSpace.has(outsideKey)) {
+        exterior.set(`${keyFor(portal.inside)}:${outsideKey}`, portal);
+      }
+    }
+    clusterPortals.set(cluster, exterior);
+  }
+  const roomPortals = clusters.map(cluster => [...clusterPortals.get(cluster)!.values()]);
   const towerDoors = rooms.map(() => [] as GridPoint[]);
   for (const [index, edge] of connections.entries()) {
+    if (clusters[edge.a] === clusters[edge.b]) {
+      continue;
+    }
     const addLoop = index >= tree.length;
     const startTower = settings.towerConnections > 0 && rooms[edge.a].floors > 1;
     const endTower = settings.towerConnections > 0 && rooms[edge.b].floors > 1;
