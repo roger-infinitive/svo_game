@@ -12,6 +12,7 @@ const file = document.querySelector<HTMLInputElement>("#file")!;
 const seedInput = document.querySelector<HTMLInputElement>("#dungeon-seed")!;
 const generate = document.querySelector<HTMLButtonElement>("#generate-dungeon")!;
 const exportDungeon = document.querySelector<HTMLButtonElement>("#export-dungeon")!;
+const dungeonFlight = document.querySelector<HTMLButtonElement>("#dungeon-flight")!;
 const depth = document.querySelector<HTMLInputElement>("#depth")!;
 const level = document.querySelector<HTMLOutputElement>("#level")!;
 const lod = document.querySelector<HTMLInputElement>("#lod")!;
@@ -137,6 +138,21 @@ async function start() {
   let dungeonBytes: ArrayBuffer | undefined;
   let player: GridPoint = { x: 0, y: 0, z: 0 };
   let stepCooldown = 0;
+  let flying = false;
+
+  function setDungeonFlight(enabled: boolean) {
+    flying = enabled;
+    dungeonFlight.textContent = flying ? "Walk (F)" : "Fly (F)";
+    if (dungeon) {
+      if (flying) {
+        status.value = `Dungeon ${dungeon.seed} · Flying`;
+      } else {
+        stepCooldown = 0;
+        syncDungeonCamera(dungeon);
+      }
+    }
+    dirty = true;
+  }
 
   function placeDungeonCamera() {
     if (!dungeon) {
@@ -146,9 +162,7 @@ async function start() {
     player = { ...dungeon.entrance, y: dungeon.entrance.y * floorHeight };
     yaw = 0;
     pitch = 0;
-    stepCooldown = 0;
-    syncDungeonCamera(dungeon);
-    dirty = true;
+    setDungeonFlight(false);
   }
 
   function syncDungeonCamera(layout: Dungeon) {
@@ -263,6 +277,7 @@ async function start() {
       level.value = depth.value;
       seedInput.value = String(seed);
       exportDungeon.disabled = false;
+      dungeonFlight.disabled = false;
       placeDungeonCamera();
     } catch (error) {
       status.value = String(error);
@@ -283,6 +298,9 @@ async function start() {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+  dungeonFlight.addEventListener("click", () => {
+    setDungeonFlight(!flying);
+  });
 
   file.addEventListener("change", async () => {
     const model = file.files?.[0];
@@ -297,6 +315,8 @@ async function start() {
       dungeon = undefined;
       dungeonBytes = undefined;
       exportDungeon.disabled = true;
+      dungeonFlight.disabled = true;
+      setDungeonFlight(false);
       resetCamera();
       status.value = model.name;
     } catch (error) {
@@ -340,6 +360,8 @@ async function start() {
       requestTrace();
     } else if (event.code === "KeyC" && !event.repeat) {
       clearTraces();
+    } else if (event.code === "KeyF" && dungeon && !event.repeat) {
+      setDungeonFlight(!flying);
     }
   });
   window.addEventListener("keyup", event => {
@@ -372,7 +394,7 @@ async function start() {
     const side = Number(keys.has("KeyD")) - Number(keys.has("KeyA"));
     const vertical = Number(keys.has("Space")) -
       Number(keys.has("ShiftLeft") || keys.has("ShiftRight"));
-    if (dungeon) {
+    if (dungeon && !flying) {
       stepCooldown = Math.max(0, stepCooldown - deltaSeconds);
       if (deltaSeconds > 0 && stepCooldown === 0 && (forward || side || vertical)) {
         const facingX = Math.abs(sinYaw) > Math.abs(cosYaw) ? Math.sign(sinYaw) : 0;
@@ -390,7 +412,8 @@ async function start() {
         stepCooldown = 0.16;
       }
     } else {
-      const step = 4 * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
+      const scale = dungeon ? dungeonWorldScale : 1;
+      const step = 4 * scale * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
       position[0] += (forward * sinYaw * cosPitch + side * cosYaw) * step;
       position[1] += (forward * sinPitch + vertical) * step;
       position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
