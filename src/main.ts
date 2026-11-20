@@ -3,7 +3,7 @@ import type { Octree } from "./rsvo.ts";
 import type { Dungeon } from "./dungeon/dungeon-generator.ts";
 import { dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
 import { climbDirections, moveInDungeon } from "./dungeon/dungeon-walk.ts";
-import { floorHeight } from "./dungeon/rooms.ts";
+import { dungeonFloors, dungeonLength, dungeonWidth, floorHeight } from "./dungeon/rooms.ts";
 import type { GridPoint } from "./dungeon/rooms.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#view")!;
@@ -167,7 +167,7 @@ async function start() {
 
   function syncDungeonCamera(layout: Dungeon) {
     position[0] = (player.x + 0.5) * dungeonWorldScale;
-    position[1] = (player.y + 1.6) * dungeonWorldScale;
+    position[1] = (player.y + 0.8) * dungeonWorldScale;
     position[2] = (player.z + 0.5) * dungeonWorldScale;
     const floor = 1 + Math.floor(player.y / floorHeight);
     status.value = `Dungeon ${layout.seed} · Floor ${floor}` + climbDirections(layout, player);
@@ -196,12 +196,19 @@ async function start() {
     dirty = true;
   }
 
-  function upload(tree: Octree) {
+  function upload(tree: Octree, layout?: Dungeon) {
     const split = Math.ceil(tree.masks.length / 2);
+    const ladders = new Uint32Array(layout ? dungeonWidth * dungeonLength * dungeonFloors : 1);
+    if (layout) {
+      for (const key of layout.verticalLinks) {
+        ladders[key] = 1;
+      }
+    }
     const sources = [
       tree.masks,
       tree.firstChild.subarray(0, split),
       tree.firstChild.subarray(split),
+      ladders,
     ];
 
     const storageLimit = Math.min(maxBufferSize, maxStorageBufferBindingSize);
@@ -226,13 +233,17 @@ async function start() {
         );
         buffer.unmap();
       }
-      const entries = next.map((buffer, index) => ({
+      const entries = next.slice(0, 3).map((buffer, index) => ({
         binding: index + 1,
         resource: { buffer },
       }));
       group = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
-        entries: [{ binding: 0, resource: { buffer: cameraBuffer } }, ...entries],
+        entries: [
+          { binding: 0, resource: { buffer: cameraBuffer } },
+          ...entries,
+          { binding: 6, resource: { buffer: next[3] } },
+        ],
       });
       modelEntries = entries;
     } catch (error) {
@@ -270,7 +281,7 @@ async function start() {
     try {
       const generated = await buildDungeon(seed);
       const tree = parseRsvo(generated.buffer);
-      upload(tree);
+      upload(tree, generated.dungeon);
       dungeon = generated.dungeon;
       dungeonBytes = generated.buffer;
       depth.value = String(tree.depth);
@@ -412,8 +423,8 @@ async function start() {
         stepCooldown = 0.16;
       }
     } else {
-      const scale = dungeon ? dungeonWorldScale : 1;
-      const step = 4 * scale * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
+      const speed = dungeon ? 2 * dungeonWorldScale : 4;
+      const step = speed * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
       position[0] += (forward * sinYaw * cosPitch + side * cosYaw) * step;
       position[1] += (forward * sinPitch + vertical) * step;
       position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
@@ -468,6 +479,9 @@ async function start() {
     uniforms[18] = displayWidth / displayHeight;
     uniforms[19] = Number(depth.value);
     uniforms[20] = dungeon ? dungeonWorldScale : 0;
+    uniforms[21] = dungeonWidth;
+    uniforms[22] = dungeonLength;
+    uniforms[23] = floorHeight;
     uniforms[3] = Number(lod.value);
     device.queue.writeBuffer(cameraBuffer, 0, uniforms);
 

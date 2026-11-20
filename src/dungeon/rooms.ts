@@ -17,7 +17,7 @@ export interface DungeonRoom {
 export const dungeonWidth = 48;
 export const dungeonLength = 48;
 export const dungeonFloors = 3;
-export const floorHeight = 4;
+export const floorHeight = 2;
 
 export function gridKey(point: GridPoint): number {
   return (point.y * dungeonLength + point.z) * dungeonWidth + point.x;

@@ -39,6 +39,7 @@ struct GizmoVertex {
 @group(0) @binding(3) var<storage, read> childBaseHigh: array<u32>;
 @group(0) @binding(4) var<storage, read_write> traceOutput: TraceRecords;
 @group(0) @binding(5) var<storage, read> trace: TraceRecords;
+@group(0) @binding(6) var<storage, read> dungeonLadders: array<u32>;
 
 fn firstChild(node: u32) -> u32 {
   let split = arrayLength(&childBase);
@@ -158,26 +159,68 @@ fn raycast(origin: vec3f, direction: vec3f, start: f32) -> Hit {
   return vec4f(array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3))[i], 0, 1);
 }
 
+fn stoneTileColor(address: vec3u, ceiling: bool) -> vec3f {
+  let tileX = address.x / 16u;
+  let tileZ = address.z / 16u;
+  let slab = address.y / 2u;
+  let seed = vec3f(f32(tileX), f32(tileZ), f32(slab));
+  let variation = fract(52.9829189 * fract(dot(seed, vec3f(0.06711, 0.00584, 0.08321))));
+  let stone = select(vec3f(0.63, 0.65, 0.67), vec3f(0.51, 0.53, 0.55), ceiling);
+  let grout = address.x % 16u == 0u || address.z % 16u == 0u;
+  return select(stone * mix(0.88, 1.10, variation), vec3f(0.16, 0.17, 0.18), grout);
+}
+
 fn dungeonColor(hit: Hit, origin: vec3f, direction: vec3f) -> vec3f {
   let meterScale = camera.scene.x;
   let surface = origin + direction * hit.t - hit.normal * (meterScale / 512.0);
-  let voxel = surface * (16.0 / meterScale);
-  var face = voxel.xy;
-  if (abs(hit.normal.x) > 0.5) {
-    face = voxel.zy;
+  let voxel = surface * (32.0 / meterScale);
+  let address = vec3u(max(voxel, vec3f(0)));
+  let cellX = address.x / 32u;
+  let cellZ = address.z / 32u;
+  let voxelsPerStory = 32u * u32(camera.scene.w);
+  let story = address.y / voxelsPerStory;
+  let cellKey = (story * u32(camera.scene.z) + cellZ) * u32(camera.scene.y) + cellX;
+
+  // Match the rail and rung voxels placed in each marked climb cell.
+  let ladderX = address.x % 32u;
+  let rung = ladderX > 19u && ladderX < 27u && address.y % 8u == 4u;
+  let rail = ladderX == 19u || ladderX == 27u;
+  let ladder = address.z % 32u == 3u && (rail || rung)
+    && cellKey < arrayLength(&dungeonLadders) && dungeonLadders[cellKey] != 0u;
+
+  // The mesher reserves one layer for the raised tile faces. A side of
+  // that layer is stone where its outward normal points into a grout seam.
+  let tileX = address.x % 16u;
+  let tileZ = address.z % 16u;
+  let layer = address.y % voxelsPerStory;
+  let ceilingTile = layer == voxelsPerStory - 2u;
+  let tileEdgeX = (hit.normal.x < -0.5 && tileX == 1u)
+    || (hit.normal.x > 0.5 && tileX == 15u);
+  let tileEdgeZ = (hit.normal.z < -0.5 && tileZ == 1u)
+    || (hit.normal.z > 0.5 && tileZ == 15u);
+  let tileSide = (layer == 1u || ceilingTile)
+    && tileX != 0u && tileZ != 0u && (tileEdgeX || tileEdgeZ);
+
+  var material: vec3f;
+  if (ladder) {
+    material = vec3f(0.67, 0.37, 0.17);
+  } else if (tileSide) {
+    material = stoneTileColor(address, ceilingTile);
   } else if (abs(hit.normal.y) > 0.5) {
-    face = voxel.xz;
+    material = stoneTileColor(address, hit.normal.y < 0.0);
+  } else {
+    let face = select(voxel.xy, voxel.zy, abs(hit.normal.x) > 0.5);
+    let row = floor(face.y / 4.0);
+    let offset = 8.0 * fract(row * 0.5);
+    let column = floor((face.x + offset) / 8.0);
+    let mortar = fract(face.y / 4.0) < 0.25 || fract((face.x + offset) / 8.0) < 0.125;
+    let variation = fract(column * 0.618 + row * 0.413);
+    let brick = mix(vec3f(0.47, 0.48, 0.50), vec3f(0.65, 0.67, 0.70), variation);
+    material = select(brick, vec3f(0.31, 0.32, 0.34), mortar);
   }
 
-  let row = floor(face.y / 4.0);
-  let offset = 8.0 * fract(row * 0.5);
-  let column = floor((face.x + offset) / 8.0);
-  let mortar = fract(face.y / 4.0) < 0.25 || fract((face.x + offset) / 8.0) < 0.125;
-  let variation = fract(column * 0.618 + row * 0.413);
-  let brick = mix(vec3f(0.50, 0.23, 0.14), vec3f(0.77, 0.43, 0.28), variation);
-  let material = select(brick, vec3f(0.29, 0.25, 0.22), mortar);
   let distance = length(direction) * hit.t / meterScale;
-  let falloff = 1.0 / (1.0 + 0.021 * distance * distance);
+  let falloff = 1.0 / (1.0 + 0.084 * distance * distance);
   let facing = max(0.0, dot(hit.normal, -normalize(direction)));
   return material * (0.28 + falloff * (0.23 + 0.55 * facing));
 }

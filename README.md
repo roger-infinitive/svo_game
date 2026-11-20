@@ -12,7 +12,7 @@ Explore voxel models in your browser. The viewer starts with a sample torus and 
 
 Click **Generate dungeon**. Leave **Seed** empty for a random layout or enter a number to repeat a layout. Rooms and hallways are built across three floors. Some rooms have an open centre with a gallery above.
 
-Click the viewer and use **W A S D** to move one metre at a time. Use **Space** or **Shift** at a ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.
+Click the viewer and use **W A S D** to move one metre at a time. Floors are two metres apart. Use **Space** or **Shift** at a brown ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.
 
 Press **F** or click **Fly** to move freely through walls and between floors. Switch back to **Walk** to return to your last grid position.
 
