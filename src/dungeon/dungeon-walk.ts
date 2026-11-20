@@ -1,6 +1,6 @@
 import { addGridPoints, insideDungeon } from "./dungeon-generator.ts";
 import type { Dungeon } from "./dungeon-generator.ts";
-import { dungeonFloors, floorHeight, gridKey } from "./rooms.ts";
+import { floorHeight, gridKey } from "./rooms.ts";
 import type { GridPoint } from "./rooms.ts";
 
 export function moveInDungeon(
@@ -10,13 +10,14 @@ export function moveInDungeon(
 ): GridPoint {
   const next = addGridPoints(player, direction);
   const floor = Math.floor(player.y / floorHeight);
+  const size = dungeon.settings;
 
   if (direction.y !== 0) {
-    if (next.y < 0 || next.y > (dungeonFloors - 1) * floorHeight) {
+    if (next.y < 0 || next.y > (size.floors - 1) * floorHeight) {
       return player;
     }
     const lowerFloor = Math.floor(Math.min(player.y, next.y) / floorHeight);
-    const link = gridKey({ ...player, y: lowerFloor });
+    const link = gridKey({ ...player, y: lowerFloor }, size);
     return dungeon.verticalLinks.has(link) ? next : player;
   }
 
@@ -24,7 +25,7 @@ export function moveInDungeon(
     return player;
   }
   const cell = { ...next, y: floor };
-  return insideDungeon(cell) && dungeon.walkable.has(gridKey(cell)) ? next : player;
+  return insideDungeon(cell, size) && dungeon.walkable.has(gridKey(cell, size)) ? next : player;
 }
 
 export function climbDirections(dungeon: Dungeon, player: GridPoint): string {

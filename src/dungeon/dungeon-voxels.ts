@@ -1,23 +1,27 @@
 import type { Dungeon } from "./dungeon-generator.ts";
-import {
-  dungeonFloors, dungeonLength, dungeonWidth, floorHeight, gridKey,
-} from "./rooms.ts";
+import { floorHeight, gridKey } from "./rooms.ts";
+import type { DungeonSize } from "./rooms.ts";
 
 export const voxelsPerMeter = 32;
-export const dungeonWorldScale = 8 / 64;
 
-const octreeDepth = 11;
-const voxelsPerChunk = 16;
+const chunkDepth = 4;
+const voxelsPerChunk = 2 ** chunkDepth;
 const chunksPerMeter = voxelsPerMeter / voxelsPerChunk;
 const floorChunks = floorHeight * chunksPerMeter;
 const chunkVolume = voxelsPerChunk ** 3;
-const chunkHeight = dungeonFloors * floorChunks;
-const chunkWidth = dungeonWidth * chunksPerMeter;
-const chunkLength = dungeonLength * chunksPerMeter;
 
-const mortonAxis = Uint32Array.from({ length: 128 }, (_, value) => {
+function dungeonOctreeDepth(size: DungeonSize): number {
+  const meters = Math.max(size.width, size.length, size.floors * floorHeight);
+  return Math.ceil(Math.log2(meters * voxelsPerMeter));
+}
+
+export function dungeonWorldScale(size: DungeonSize): number {
+  return 8 * voxelsPerMeter / 2 ** dungeonOctreeDepth(size);
+}
+
+const mortonAxis = Uint32Array.from({ length: voxelsPerChunk }, (_, value) => {
   let bits = 0;
-  for (let bit = 0; bit < 7; bit++) {
+  for (let bit = 0; bit < chunkDepth; bit++) {
     bits |= ((value >> bit) & 1) << (3 * bit);
   }
   return bits;
@@ -27,8 +31,16 @@ function morton(x: number, y: number, z: number): number {
   return mortonAxis[x] | (mortonAxis[y] << 1) | (mortonAxis[z] << 2);
 }
 
-function airIndex(x: number, y: number, z: number): number {
-  return (y * chunkLength + z) * chunkWidth + x;
+function chunkMorton(x: number, y: number, z: number): bigint {
+  let code = 0n;
+  for (let shift = 0n; x !== 0 || y !== 0 || z !== 0; shift += 3n) {
+    const child = (x & 1) | ((y & 1) << 1) | ((z & 1) << 2);
+    code |= BigInt(child) << shift;
+    x >>>= 1;
+    y >>>= 1;
+    z >>>= 1;
+  }
+  return code;
 }
 
 function brickThickness(u: number, v: number): number {
@@ -86,77 +98,74 @@ function addLadder(chunk: Uint8Array) {
   }
 }
 
-function dungeonChunks(dungeon: Dungeon): Map<number, Uint8Array> {
-  const air = new Uint8Array(chunkWidth * chunkHeight * chunkLength);
-  for (const { x, y, z } of [...dungeon.roomSpace.values(), ...dungeon.walkable.values()]) {
-    const floorY = y * floorChunks;
-    for (let offset = 0; offset < floorChunks; offset++) {
-      for (let dz = 0; dz < chunksPerMeter; dz++) {
-        for (let dx = 0; dx < chunksPerMeter; dx++) {
-          air[airIndex(x * chunksPerMeter + dx, floorY + offset, z * chunksPerMeter + dz)] = 1;
-        }
-      }
-    }
-  }
+function dungeonChunks(dungeon: Dungeon): Map<bigint, Uint8Array> {
+  const { settings } = dungeon;
 
   function isAir(x: number, y: number, z: number): boolean {
-    return x >= 0 && x < chunkWidth &&
-      y >= 0 && y < chunkHeight &&
-      z >= 0 && z < chunkLength &&
-      air[airIndex(x, y, z)] === 1;
+    const cell = {
+      x: Math.floor(x / chunksPerMeter),
+      y: Math.floor(y / floorChunks),
+      z: Math.floor(z / chunksPerMeter),
+    };
+    if (cell.x < 0 || cell.x >= settings.width ||
+        cell.y < 0 || cell.y >= settings.floors ||
+        cell.z < 0 || cell.z >= settings.length) {
+      return false;
+    }
+    const key = gridKey(cell, settings);
+    return dungeon.roomSpace.has(key) || dungeon.walkable.has(key);
   }
 
-  const chunks = new Map<number, Uint8Array>();
-  for (let y = 0; y < chunkHeight; y++) {
-    for (let z = 0; z < chunkLength; z++) {
-      for (let x = 0; x < chunkWidth; x++) {
-        if (!isAir(x, y, z)) {
-          continue;
-        }
+  const cells = new Map([...dungeon.roomSpace, ...dungeon.walkable]);
+  const chunks = new Map<bigint, Uint8Array>();
+  for (const cell of cells.values()) {
+    for (let dy = 0; dy < floorChunks; dy++) {
+      for (let dz = 0; dz < chunksPerMeter; dz++) {
+        for (let dx = 0; dx < chunksPerMeter; dx++) {
+          const x = cell.x * chunksPerMeter + dx;
+          const y = cell.y * floorChunks + dy;
+          const z = cell.z * chunksPerMeter + dz;
 
-        const floor = y / floorChunks;
-        const cellX = Math.floor(x / chunksPerMeter);
-        const cellZ = Math.floor(z / chunksPerMeter);
-        // An upper gallery has a floor only under its walkable rim. Its
-        // central atrium and dedicated climb cells stay open between levels.
-        const galleryFloor = Number.isInteger(floor) && floor > 0 &&
-          dungeon.walkable.has(gridKey({ x: cellX, y: floor, z: cellZ })) &&
-          !dungeon.verticalLinks.has(gridKey({ x: cellX, y: floor - 1, z: cellZ }));
-        const floorFace = galleryFloor || !isAir(x, y - 1, z);
-        const ceilingFace = !isAir(x, y + 1, z);
-        const westFace = !isAir(x - 1, y, z);
-        const eastFace = !isAir(x + 1, y, z);
-        const northFace = !isAir(x, y, z - 1);
-        const southFace = !isAir(x, y, z + 1);
-        const hasLadder = x % chunksPerMeter === 1 && z % chunksPerMeter === 0 &&
-          dungeon.verticalLinks.has(gridKey({ x: cellX, y: Math.floor(floor), z: cellZ }));
-        if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace || hasLadder)) {
-          continue;
-        }
+          // An upper gallery keeps an open atrium and open climb cells.
+          const galleryFloor = dy === 0 && cell.y > 0 &&
+            dungeon.walkable.has(gridKey(cell, settings)) &&
+            !dungeon.verticalLinks.has(gridKey({ ...cell, y: cell.y - 1 }, settings));
+          const floorFace = galleryFloor || !isAir(x, y - 1, z);
+          const ceilingFace = !isAir(x, y + 1, z);
+          const westFace = !isAir(x - 1, y, z);
+          const eastFace = !isAir(x + 1, y, z);
+          const northFace = !isAir(x, y, z - 1);
+          const southFace = !isAir(x, y, z + 1);
+          const hasLadder = dx === 1 && dz === 0 &&
+            dungeon.verticalLinks.has(gridKey(cell, settings));
+          if (!(floorFace || ceilingFace || westFace || eastFace || northFace || southFace || hasLadder)) {
+            continue;
+          }
 
-        const chunk = new Uint8Array(chunkVolume);
-        if (floorFace) {
-          lineWithTiles(chunk, false);
+          const chunk = new Uint8Array(chunkVolume);
+          if (floorFace) {
+            lineWithTiles(chunk, false);
+          }
+          if (ceilingFace) {
+            lineWithTiles(chunk, true);
+          }
+          if (westFace) {
+            lineWithBricks(chunk, "x", false, z, y);
+          }
+          if (eastFace) {
+            lineWithBricks(chunk, "x", true, z, y);
+          }
+          if (northFace) {
+            lineWithBricks(chunk, "z", false, x, y);
+          }
+          if (southFace) {
+            lineWithBricks(chunk, "z", true, x, y);
+          }
+          if (hasLadder) {
+            addLadder(chunk);
+          }
+          chunks.set(chunkMorton(x, y, z), chunk);
         }
-        if (ceilingFace) {
-          lineWithTiles(chunk, true);
-        }
-        if (westFace) {
-          lineWithBricks(chunk, "x", false, z, y);
-        }
-        if (eastFace) {
-          lineWithBricks(chunk, "x", true, z, y);
-        }
-        if (northFace) {
-          lineWithBricks(chunk, "z", false, x, y);
-        }
-        if (southFace) {
-          lineWithBricks(chunk, "z", true, x, y);
-        }
-        if (hasLadder) {
-          addLadder(chunk);
-        }
-        chunks.set(morton(x, y, z), chunk);
       }
     }
   }
@@ -165,36 +174,57 @@ function dungeonChunks(dungeon: Dungeon): Map<number, Uint8Array> {
 
 export function dungeonToRsvo(dungeon: Dungeon): ArrayBuffer {
   const chunks = dungeonChunks(dungeon);
+  const octreeDepth = dungeonOctreeDepth(dungeon.settings);
+  const chunkLevel = octreeDepth - chunkDepth;
   const masks: number[][] = Array.from({ length: octreeDepth }, () => []);
-  const lastParent = new Int32Array(octreeDepth).fill(-1);
+  const lastChunkParents = Array<bigint>(chunkLevel).fill(-1n);
+  const lastVoxelParents = new Int32Array(chunkDepth);
   let leafCount = 0;
 
-  // Morton order visits a parent's children consecutively. Build each
-  // breadth-first mask level directly from sparse, sorted half-metre chunks.
-  const sortedChunks = [...chunks.keys()].sort((a, b) => a - b);
+  // Keep the wide Morton addresses at chunk level. Each chunk's voxels
+  // use small integer addresses, even when the world is much larger.
+  const sortedChunks = [...chunks.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
   for (const chunkKey of sortedChunks) {
+    let chunkCode = chunkKey;
+    for (let level = chunkLevel - 1; level >= 0; level--) {
+      const parent = chunkCode >> 3n;
+      const bit = 1 << Number(chunkCode & 7n);
+      const levelMasks = masks[level];
+      if (lastChunkParents[level] === parent) {
+        levelMasks[levelMasks.length - 1] |= bit;
+        break;
+      }
+      levelMasks.push(bit);
+      lastChunkParents[level] = parent;
+      chunkCode = parent;
+    }
+
+    lastVoxelParents.fill(-1);
     const chunk = chunks.get(chunkKey)!;
-    const base = chunkKey * chunkVolume;
     for (let voxel = 0; voxel < chunk.length; voxel++) {
       if (chunk[voxel] === 0) {
         continue;
       }
       leafCount++;
-      let code = base + voxel;
-      for (let level = octreeDepth - 1; level >= 0; level--) {
-        // Depth 11 uses 33-bit Morton codes, so a bitwise shift would truncate them.
-        const parent = Math.floor(code / 8);
+      let code = voxel;
+      for (let local = chunkDepth - 1; local >= 0; local--) {
+        const parent = code >>> 3;
         const bit = 1 << (code & 7);
-        const levelMasks = masks[level];
-        if (lastParent[level] === parent) {
+        const levelMasks = masks[chunkLevel + local];
+        if (lastVoxelParents[local] === parent) {
           levelMasks[levelMasks.length - 1] |= bit;
           break;
         }
         levelMasks.push(bit);
-        lastParent[level] = parent;
+        lastVoxelParents[local] = parent;
         code = parent;
       }
     }
+  }
+
+  const totalNodes = masks.reduce((count, level) => count + level.length, leafCount);
+  if (totalNodes > 0xffffffff) {
+    throw new Error("This dungeon exceeds the number of nodes an RSVO file can store.");
   }
 
   const headerSize = 20 + 4 * (octreeDepth + 1);

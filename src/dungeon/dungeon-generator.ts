@@ -2,12 +2,13 @@ import { aStar } from "./a-star.ts";
 import { chooseHallways, delaunayEdges, minimumSpanningTree } from "./room-graph.ts";
 import type { RoomEdge } from "./room-graph.ts";
 import {
-  dungeonFloors, dungeonLength, dungeonWidth, gridKey, placeRooms, roomCenter, seededRandom,
+  defaultDungeonSettings, gridKey, placeRooms, roomCenter, seededRandom, validateDungeonSettings,
 } from "./rooms.ts";
-import type { DungeonRoom, GridPoint } from "./rooms.ts";
+import type { DungeonRoom, DungeonSettings, DungeonSize, GridPoint } from "./rooms.ts";
 
 export interface Dungeon {
   seed: number;
+  settings: DungeonSettings;
   rooms: DungeonRoom[];
   graph: RoomEdge[];
   tree: RoomEdge[];
@@ -36,11 +37,11 @@ export function addGridPoints(a: GridPoint, b: GridPoint): GridPoint {
   return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
 }
 
-export function insideDungeon(point: GridPoint): boolean {
+export function insideDungeon(point: GridPoint, size: DungeonSize): boolean {
   return (
-    point.x >= 0 && point.x < dungeonWidth &&
-    point.z >= 0 && point.z < dungeonLength &&
-    point.y >= 0 && point.y < dungeonFloors
+    point.x >= 0 && point.x < size.width &&
+    point.z >= 0 && point.z < size.length &&
+    point.y >= 0 && point.y < size.floors
   );
 }
 
@@ -69,12 +70,24 @@ function portals(room: DungeonRoom): Portal[] {
   return result;
 }
 
-export function generateDungeon(seed: number): Dungeon {
+export function generateDungeon(
+  seed: number,
+  settings: DungeonSettings = defaultDungeonSettings,
+): Dungeon {
+  validateDungeonSettings(settings);
   const random = seededRandom(seed);
-  const rooms = placeRooms(random);
-  const graph = delaunayEdges(rooms);
+  let rooms = placeRooms(random, settings);
+  for (let attempt = 0; rooms.length < settings.roomCount && attempt < 8; attempt++) {
+    rooms = placeRooms(random, settings);
+  }
+  if (rooms.length < settings.roomCount) {
+    throw new Error("Could not fit all rooms. Try a larger map, smaller rooms, or fewer rooms.");
+  }
+
+  const keyFor = (point: GridPoint) => gridKey(point, settings);
+  const graph = delaunayEdges(rooms, settings);
   const tree = minimumSpanningTree(rooms.length, graph);
-  const connections = chooseHallways(graph, tree, random);
+  const connections = chooseHallways(graph, tree, random, settings.loopPercent);
   const roomSpace = new Map<number, GridPoint>();
   const walkable = new Map<number, GridPoint>();
   const verticalLinks = new Set<number>();
@@ -86,7 +99,7 @@ export function generateDungeon(seed: number): Dungeon {
       for (let z = room.z; z < room.z + room.length; z++) {
         for (let x = room.x; x < room.x + room.width; x++) {
           const point = { x, y, z };
-          const key = gridKey(point);
+          const key = keyFor(point);
           roomSpace.set(key, point);
           const alongWall = x === room.x || x === room.x + room.width - 1 ||
             z === room.z || z === room.z + room.length - 1;
@@ -96,7 +109,7 @@ export function generateDungeon(seed: number): Dungeon {
         }
       }
       if (y < room.floor + room.floors - 1) {
-        verticalLinks.add(gridKey({ x: room.x, y, z: room.z }));
+        verticalLinks.add(keyFor({ x: room.x, y, z: room.z }));
       }
     }
   }
@@ -107,8 +120,8 @@ export function generateDungeon(seed: number): Dungeon {
     const startChoices = roomPortals[edge.a];
     const endChoices = roomPortals[edge.b];
     const pairs = startChoices.flatMap(start => endChoices.map(end => {
-      const reused = Number(corridors.has(gridKey(start.outside))) +
-        Number(corridors.has(gridKey(end.outside)));
+      const reused = Number(corridors.has(keyFor(start.outside))) +
+        Number(corridors.has(keyFor(end.outside)));
       const score = distance(start.outside, end.outside) +
         3 * Math.abs(start.outside.y - end.outside.y) - 2 * reused;
       return { start, end, reused, score };
@@ -121,20 +134,20 @@ export function generateDungeon(seed: number): Dungeon {
       path = aStar({
         start: start.outside,
         goal: end.outside,
-        key: gridKey,
+        key: keyFor,
         heuristic: distance,
         *neighbors(point) {
           for (const direction of gridDirections) {
             const node = addGridPoints(point, direction);
-            if (!insideDungeon(node) || roomSpace.has(gridKey(node))) {
+            if (!insideDungeon(node, settings) || roomSpace.has(keyFor(node))) {
               continue;
             }
-            const reused = corridors.has(gridKey(node));
+            const reused = corridors.has(keyFor(node));
             if (direction.y === 0) {
               yield { node, cost: reused ? 1 : 3 };
             } else {
               const lower = direction.y > 0 ? point : node;
-              yield { node, cost: verticalLinks.has(gridKey(lower)) ? 2 : 10 };
+              yield { node, cost: verticalLinks.has(keyFor(lower)) ? 2 : 10 };
             }
           }
         },
@@ -149,19 +162,20 @@ export function generateDungeon(seed: number): Dungeon {
     }
 
     for (const [step, point] of path.entries()) {
-      const key = gridKey(point);
+      const key = keyFor(point);
       corridors.add(key);
       walkable.set(key, point);
       const previous = path[step - 1];
       if (previous && point.y !== previous.y) {
-        verticalLinks.add(gridKey(point.y < previous.y ? point : previous));
+        verticalLinks.add(keyFor(point.y < previous.y ? point : previous));
       }
     }
     hallways.push([doors[0], ...path, doors[1]]);
   }
 
+  const entranceRoom = rooms.find(room => room.floor === 0 && room.floors === 1) ?? rooms[0];
   return {
-    seed, rooms, graph, tree, hallways, roomSpace, walkable, verticalLinks,
-    entrance: roomCenter(rooms[1]),
+    seed, settings, rooms, graph, tree, hallways, roomSpace, walkable, verticalLinks,
+    entrance: roomCenter(entranceRoom),
   };
 }

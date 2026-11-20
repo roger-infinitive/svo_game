@@ -14,13 +14,74 @@ export interface DungeonRoom {
   floors: number;
 }
 
-export const dungeonWidth = 48;
-export const dungeonLength = 48;
-export const dungeonFloors = 3;
 export const floorHeight = 2;
 
-export function gridKey(point: GridPoint): number {
-  return (point.y * dungeonLength + point.z) * dungeonWidth + point.x;
+export interface DungeonSize {
+  width: number;
+  length: number;
+  floors: number;
+}
+
+export interface DungeonSettings extends DungeonSize {
+  roomCount: number;
+  minRoomSize: number;
+  maxRoomSize: number;
+  towerPercent: number;
+  loopPercent: number;
+}
+
+export const defaultDungeonSettings: DungeonSettings = {
+  width: 48,
+  length: 48,
+  floors: 3,
+  roomCount: 15,
+  minRoomSize: 6,
+  maxRoomSize: 9,
+  towerPercent: 22,
+  loopPercent: 12,
+};
+
+export const dungeonSettingLimits = {
+  width: [1],
+  length: [1],
+  floors: [1],
+  roomCount: [1],
+  minRoomSize: [3],
+  maxRoomSize: [3],
+  towerPercent: [0, 100],
+  loopPercent: [0, 100],
+} as const satisfies Record<keyof DungeonSettings, readonly [number, number?]>;
+
+export function validateDungeonSettings(settings: DungeonSettings) {
+  for (const key of Object.keys(dungeonSettingLimits) as (keyof DungeonSettings)[]) {
+    const [min, max]: readonly [number, number?] = dungeonSettingLimits[key];
+    const value = settings[key];
+    if (!Number.isSafeInteger(value) || value < min || (max !== undefined && value > max)) {
+      const range = max === undefined ? `at least ${min}` : `between ${min} and ${max}`;
+      throw new Error(`${key} must be a whole number ${range}.`);
+    }
+  }
+  if (settings.minRoomSize > settings.maxRoomSize) {
+    throw new Error("Minimum room size must be at most the maximum room size.");
+  }
+  if (Math.min(settings.width, settings.length) < settings.minRoomSize + 2) {
+    throw new Error("The smallest room needs to fit inside the map with space for a hallway on each side.");
+  }
+  if (settings.roomCount < settings.floors) {
+    throw new Error("Add at least one room per floor.");
+  }
+  const span = Math.max(settings.width, settings.length, settings.floors * floorHeight);
+  // RSVO stores at most 32 subdivisions. Each metre uses 5 of those bits.
+  if (span > 2 ** 27) {
+    throw new Error("This map exceeds the RSVO depth limit.");
+  }
+  if (!Number.isSafeInteger(settings.width * settings.length * settings.floors)) {
+    throw new Error("This map exceeds the exact grid address range.");
+  }
+}
+
+export function gridKey(point: GridPoint, size: DungeonSize): number {
+  return (point.y * size.length + point.z) * size.width + point.x;
 }
 
 export function seededRandom(seed: number): () => number {
@@ -40,34 +101,41 @@ function separated(a: DungeonRoom, b: DungeonRoom): boolean {
   );
 }
 
-export function placeRooms(random: () => number): DungeonRoom[] {
+export function placeRooms(random: () => number, settings: DungeonSettings): DungeonRoom[] {
   const rooms: DungeonRoom[] = [];
   const randomInt = (limit: number) => Math.floor(random() * limit);
-  const roomCount = 15;
+  const { roomCount, minRoomSize, maxRoomSize, width, length, floors, towerPercent } = settings;
+  const hasTower = floors > 1 && towerPercent > 0 && roomCount > floors;
+  const reservedRooms = floors + Number(hasTower);
+  const xMargin = width >= minRoomSize + 4 ? 2 : 1;
+  const zMargin = length >= minRoomSize + 4 ? 2 : 1;
+  const widestRoom = Math.min(maxRoomSize, width - 2 * xMargin);
+  const longestRoom = Math.min(maxRoomSize, length - 2 * zMargin);
 
   for (let id = 0; id < roomCount; id++) {
-    // Reserve a tower and a single-storey room on every floor.
-    const floor = id <= dungeonFloors ? Math.max(0, id - 1) : randomInt(dungeonFloors);
-    const floors = id === 0 ? 2 : id > dungeonFloors && floor < dungeonFloors - 1 &&
-      random() < 0.22 ? 2 : 1;
-
+    const floor = id < reservedRooms ? Math.max(0, id - Number(hasTower)) : randomInt(floors);
+    const isTower = (hasTower && id === 0) ||
+      (id >= reservedRooms && floor < floors - 1 && randomInt(100) < towerPercent);
     for (let attempt = 0; attempt < 400; attempt++) {
-      const width = 6 + randomInt(4);
-      const length = 6 + randomInt(4);
+      const roomWidth = minRoomSize + randomInt(widestRoom - minRoomSize + 1);
+      const roomLength = minRoomSize + randomInt(longestRoom - minRoomSize + 1);
       const room = {
         id,
-        x: 2 + randomInt(dungeonWidth - width - 3),
-        z: 2 + randomInt(dungeonLength - length - 3),
+        x: xMargin + randomInt(width - roomWidth - 2 * xMargin + 1),
+        z: zMargin + randomInt(length - roomLength - 2 * zMargin + 1),
         floor,
-        width,
-        length,
-        floors,
+        width: roomWidth,
+        length: roomLength,
+        floors: isTower ? 2 : 1,
       };
 
       if (rooms.every(other => separated(room, other))) {
         rooms.push(room);
         break;
       }
+    }
+    if (rooms.length !== id + 1) {
+      break;
     }
   }
   return rooms;

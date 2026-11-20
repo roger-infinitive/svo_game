@@ -39,7 +39,7 @@ struct GizmoVertex {
 @group(0) @binding(3) var<storage, read> childBaseHigh: array<u32>;
 @group(0) @binding(4) var<storage, read_write> traceOutput: TraceRecords;
 @group(0) @binding(5) var<storage, read> trace: TraceRecords;
-@group(0) @binding(6) var<storage, read> dungeonLadders: array<u32>;
+@group(0) @binding(6) var<storage, read> dungeonLadders: array<vec4u>;
 
 fn firstChild(node: u32) -> u32 {
   let split = arrayLength(&childBase);
@@ -170,6 +170,27 @@ fn stoneTileColor(address: vec3u, ceiling: bool) -> vec3f {
   return select(stone * mix(0.88, 1.10, variation), vec3f(0.16, 0.17, 0.18), grout);
 }
 
+fn hasLadder(cell: vec3u) -> bool {
+  // Coordinates are sorted by floor, then Z, then X.
+  var first = 0u;
+  var last = arrayLength(&dungeonLadders);
+  while (first < last) {
+    let middle = first + (last - first) / 2u;
+    let entry = dungeonLadders[middle];
+    if (all(entry.xyz == cell)) {
+      return entry.w != 0u;
+    }
+    let before = entry.y < cell.y || (entry.y == cell.y &&
+      (entry.z < cell.z || (entry.z == cell.z && entry.x < cell.x)));
+    if (before) {
+      first = middle + 1u;
+    } else {
+      last = middle;
+    }
+  }
+  return false;
+}
+
 fn dungeonColor(hit: Hit, origin: vec3f, direction: vec3f) -> vec3f {
   let meterScale = camera.scene.x;
   let surface = origin + direction * hit.t - hit.normal * (meterScale / 512.0);
@@ -179,14 +200,13 @@ fn dungeonColor(hit: Hit, origin: vec3f, direction: vec3f) -> vec3f {
   let cellZ = address.z / 32u;
   let voxelsPerStory = 32u * u32(camera.scene.w);
   let story = address.y / voxelsPerStory;
-  let cellKey = (story * u32(camera.scene.z) + cellZ) * u32(camera.scene.y) + cellX;
 
   // Match the rail and rung voxels placed in each marked climb cell.
   let ladderX = address.x % 32u;
   let rung = ladderX > 19u && ladderX < 27u && address.y % 8u == 4u;
   let rail = ladderX == 19u || ladderX == 27u;
   let ladder = address.z % 32u == 3u && (rail || rung)
-    && cellKey < arrayLength(&dungeonLadders) && dungeonLadders[cellKey] != 0u;
+    && hasLadder(vec3u(cellX, story, cellZ));
 
   // The mesher reserves one layer for the raised tile faces. A side of
   // that layer is stone where its outward normal points into a grout seam.

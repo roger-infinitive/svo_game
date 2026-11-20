@@ -1,5 +1,5 @@
-import { dungeonLength, dungeonWidth, floorHeight, roomCenter, seededRandom } from "./rooms.ts";
-import type { DungeonRoom, GridPoint } from "./rooms.ts";
+import { floorHeight, roomCenter, seededRandom } from "./rooms.ts";
+import type { DungeonRoom, DungeonSize, GridPoint } from "./rooms.ts";
 
 export interface RoomEdge {
   a: number;
@@ -57,7 +57,7 @@ function circumsphere(points: GridPoint[], vertices: Tetrahedron): Sphere | unde
   };
 }
 
-export function delaunayEdges(rooms: DungeonRoom[]): RoomEdge[] {
+export function delaunayEdges(rooms: DungeonRoom[], size: DungeonSize): RoomEdge[] {
   const centers = rooms.map(room => {
     const { x, y, z } = roomCenter(room);
     return { x, y: y * floorHeight, z };
@@ -70,13 +70,20 @@ export function delaunayEdges(rooms: DungeonRoom[]): RoomEdge[] {
 
   // Small deterministic offsets break ties between coplanar or cospherical centers.
   const jitter = seededRandom(0xa18d);
+  const planar = centers.every(point => point.y === centers[0].y);
   const points = centers.map(point => ({
     x: point.x + (jitter() - 0.5) * 0.001,
-    y: point.y + (jitter() - 0.5) * 0.001,
+    y: planar ? point.y : point.y + (jitter() - 0.5) * 0.001,
     z: point.z + (jitter() - 0.5) * 0.001,
   }));
 
-  const extent = 128 * Math.max(dungeonWidth, dungeonLength);
+  const span = Math.max(size.width, size.length, size.floors * floorHeight);
+  if (planar) {
+    // In the pyramid over a single floor, each tetrahedron has the apex
+    // and a base triangle. Its sphere cuts the floor at that circumcircle.
+    points.push({ x: size.width / 2, y: centers[0].y + span, z: size.length / 2 });
+  }
+  const extent = 128 * span;
   const firstSuperVertex = points.length;
   points.push(
     { x: extent, y: extent, z: extent },
@@ -92,7 +99,7 @@ export function delaunayEdges(rooms: DungeonRoom[]): RoomEdge[] {
 
   // Bowyer–Watson removes the tetrahedra whose spheres contain each new point,
   // then connects the exposed triangular faces of that cavity to the point.
-  for (let index = 0; index < rooms.length; index++) {
+  for (let index = 0; index < firstSuperVertex; index++) {
     const boundary = new Map<string, number[]>();
     tetrahedra = tetrahedra.filter(({ vertices, sphere }) => {
       const offset = subtract(points[index], sphere.center);
@@ -129,6 +136,9 @@ export function delaunayEdges(rooms: DungeonRoom[]): RoomEdge[] {
       for (let second = first + 1; second < 4; second++) {
         const a = vertices[first];
         const b = vertices[second];
+        if (b >= rooms.length) {
+          continue;
+        }
         edges.set(a * rooms.length + b, makeEdge(centers, a, b));
       }
     }
@@ -166,11 +176,12 @@ export function chooseHallways(
   edges: RoomEdge[],
   tree: RoomEdge[],
   random: () => number,
+  loopPercent: number,
 ): RoomEdge[] {
   const included = new Set(tree);
   const candidates = edges.filter(edge => !included.has(edge));
-  const cycles = candidates.filter(() => random() < 0.12);
-  if (cycles.length === 0 && candidates.length > 0) {
+  const cycles = candidates.filter(() => random() * 100 < loopPercent);
+  if (loopPercent > 0 && cycles.length === 0 && candidates.length > 0) {
     cycles.push(candidates[Math.floor(random() * candidates.length)]);
   }
   return [...tree, ...cycles];

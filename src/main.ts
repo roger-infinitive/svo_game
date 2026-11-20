@@ -4,13 +4,20 @@ import type { Octree } from "./rsvo.ts";
 import type { Dungeon } from "./dungeon/dungeon-generator.ts";
 import { dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
 import { climbDirections, moveInDungeon } from "./dungeon/dungeon-walk.ts";
-import { dungeonFloors, dungeonLength, dungeonWidth, floorHeight } from "./dungeon/rooms.ts";
-import type { GridPoint } from "./dungeon/rooms.ts";
+import {
+  defaultDungeonSettings, dungeonSettingLimits, floorHeight, validateDungeonSettings,
+} from "./dungeon/rooms.ts";
+import type { DungeonSettings, GridPoint } from "./dungeon/rooms.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#view")!;
 const status = document.querySelector<HTMLOutputElement>("#status")!;
 const file = document.querySelector<HTMLInputElement>("#file")!;
 const seedInput = document.querySelector<HTMLInputElement>("#dungeon-seed")!;
+const settingsButton = document.querySelector<HTMLButtonElement>("#dungeon-settings")!;
+const settingsDialog = document.querySelector<HTMLDialogElement>("#dungeon-options")!;
+const settingsForm = document.querySelector<HTMLFormElement>("#dungeon-settings-form")!;
+const settingsCancel = document.querySelector<HTMLButtonElement>("#dungeon-settings-cancel")!;
+const settingsError = document.querySelector<HTMLOutputElement>("#dungeon-settings-error")!;
 const generate = document.querySelector<HTMLButtonElement>("#generate-dungeon")!;
 const exportDungeon = document.querySelector<HTMLButtonElement>("#export-dungeon")!;
 const dungeonFlight = document.querySelector<HTMLButtonElement>("#dungeon-flight")!;
@@ -44,6 +51,47 @@ const position = [4, 5.5, -5];
 const keys = new Set<string>();
 const orientation = new CameraOrientation();
 orientation.reset(-0.17);
+let dungeonSettings = { ...defaultDungeonSettings };
+let dungeonSeed: number | undefined;
+
+const settingKeys = Object.keys(dungeonSettingLimits) as (keyof DungeonSettings)[];
+const settingFields = settingKeys.map(key => {
+  const input = settingsForm.elements.namedItem(key) as HTMLInputElement;
+  const [min, max]: readonly [number, number?] = dungeonSettingLimits[key];
+  input.min = String(min);
+  if (max !== undefined) {
+    input.max = String(max);
+  }
+  return { key, input };
+});
+
+settingsButton.addEventListener("click", () => {
+  seedInput.value = dungeonSeed === undefined ? "" : String(dungeonSeed);
+  for (const { key, input } of settingFields) {
+    input.value = String(dungeonSettings[key]);
+  }
+  settingsError.value = "";
+  settingsDialog.showModal();
+});
+
+settingsCancel.addEventListener("click", () => settingsDialog.close());
+
+settingsForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const next = { ...dungeonSettings };
+  for (const { key, input } of settingFields) {
+    next[key] = input.valueAsNumber;
+  }
+  try {
+    validateDungeonSettings(next);
+  } catch (error) {
+    settingsError.value = error instanceof Error ? error.message : String(error);
+    return;
+  }
+  dungeonSettings = next;
+  dungeonSeed = seedInput.value === "" ? undefined : seedInput.valueAsNumber;
+  settingsDialog.close();
+});
 let dirty = true;
 
 function resetCamera() {
@@ -135,6 +183,7 @@ async function start() {
   const pendingTraces: { camera: Float32Array; depth: number }[] = [];
   const savedTraces: { buffer: GPUBuffer; group: GPUBindGroup }[] = [];
   let dungeon: Dungeon | undefined;
+  let dungeonScale = 0;
   let dungeonBytes: ArrayBuffer | undefined;
   let player: GridPoint = { x: 0, y: 0, z: 0 };
   let stepCooldown = 0;
@@ -165,11 +214,12 @@ async function start() {
   }
 
   function syncDungeonCamera(layout: Dungeon) {
-    position[0] = (player.x + 0.5) * dungeonWorldScale;
-    position[1] = (player.y + 0.8) * dungeonWorldScale;
-    position[2] = (player.z + 0.5) * dungeonWorldScale;
+    position[0] = (player.x + 0.5) * dungeonScale;
+    position[1] = (player.y + 0.8) * dungeonScale;
+    position[2] = (player.z + 0.5) * dungeonScale;
     const floor = 1 + Math.floor(player.y / floorHeight);
-    status.value = `Dungeon ${layout.seed} · Floor ${floor}` + climbDirections(layout, player);
+    status.value = `Dungeon ${layout.seed} · Floor ${floor} / ${layout.settings.floors}` +
+      climbDirections(layout, player);
   }
 
   function requestTrace() {
@@ -197,11 +247,11 @@ async function start() {
 
   function upload(tree: Octree, layout?: Dungeon) {
     const split = Math.ceil(tree.masks.length / 2);
-    const ladders = new Uint32Array(layout ? dungeonWidth * dungeonLength * dungeonFloors : 1);
-    if (layout) {
-      for (const key of layout.verticalLinks) {
-        ladders[key] = 1;
-      }
+    const ladderKeys = [...(layout?.verticalLinks ?? [])].sort((a, b) => a - b);
+    const ladders = new Uint32Array(4 * Math.max(1, ladderKeys.length));
+    for (const [index, key] of ladderKeys.entries()) {
+      const { x, y, z } = layout!.walkable.get(key)!;
+      ladders.set([x, y, z, 1], index * 4);
     }
     const sources = [
       tree.masks,
@@ -268,24 +318,19 @@ async function start() {
   clearRay.addEventListener("click", clearTraces);
 
   generate.addEventListener("click", async () => {
-    if (!seedInput.reportValidity()) {
-      return;
-    }
-    const seed = seedInput.value === ""
-      ? crypto.getRandomValues(new Uint32Array(1))[0]
-      : Number(seedInput.value);
+    const seed = dungeonSeed ?? crypto.getRandomValues(new Uint32Array(1))[0];
     generate.disabled = true;
     file.disabled = true;
     status.value = "Generating dungeon…";
     try {
-      const generated = await buildDungeon(seed);
+      const generated = await buildDungeon(seed, dungeonSettings);
       const tree = parseRsvo(generated.buffer);
       upload(tree, generated.dungeon);
       dungeon = generated.dungeon;
+      dungeonScale = dungeonWorldScale(dungeon.settings);
       dungeonBytes = generated.buffer;
       depth.value = String(tree.depth);
       level.value = depth.value;
-      seedInput.value = String(seed);
       exportDungeon.disabled = false;
       dungeonFlight.disabled = false;
       placeDungeonCamera();
@@ -323,6 +368,7 @@ async function start() {
     try {
       upload(parseRsvo(await model.arrayBuffer()));
       dungeon = undefined;
+      dungeonScale = 0;
       dungeonBytes = undefined;
       exportDungeon.disabled = true;
       dungeonFlight.disabled = true;
@@ -431,7 +477,7 @@ async function start() {
         stepCooldown = 0.16;
       }
     } else {
-      const speed = dungeon ? 2 * dungeonWorldScale : 4;
+      const speed = dungeon ? 2 * dungeonScale : 4;
       const step = speed * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
       position[0] += (forward * lookForward[0] + side * right[0]) * step;
       position[1] += (forward * lookForward[1] + vertical) * step;
@@ -481,9 +527,7 @@ async function start() {
     uniforms[17] = height;
     uniforms[18] = displayWidth / displayHeight;
     uniforms[19] = Number(depth.value);
-    uniforms[20] = dungeon ? dungeonWorldScale : 0;
-    uniforms[21] = dungeonWidth;
-    uniforms[22] = dungeonLength;
+    uniforms[20] = dungeonScale;
     uniforms[23] = floorHeight;
     uniforms[3] = Number(lod.value);
     device.queue.writeBuffer(cameraBuffer, 0, uniforms);
@@ -603,7 +647,10 @@ async function start() {
   requestAnimationFrame(frame);
 }
 
-function buildDungeon(seed: number): Promise<{ dungeon: Dungeon; buffer: ArrayBuffer }> {
+function buildDungeon(
+  seed: number,
+  settings: DungeonSettings,
+): Promise<{ dungeon: Dungeon; buffer: ArrayBuffer }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./dungeon/dungeon-worker.ts", import.meta.url), {
       type: "module",
@@ -616,7 +663,7 @@ function buildDungeon(seed: number): Promise<{ dungeon: Dungeon; buffer: ArrayBu
       worker.terminate();
       reject(new Error(event.message || "Dungeon generation failed."));
     };
-    worker.postMessage(seed);
+    worker.postMessage({ seed, settings });
   });
 }
 

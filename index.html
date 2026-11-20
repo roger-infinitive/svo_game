@@ -13,10 +13,7 @@
       Open RSVO
       <input id="file" type="file" accept=".rsvo" disabled>
     </label>
-    <label>
-      Seed
-      <input id="dungeon-seed" type="number" min="0" max="4294967295" step="1" placeholder="Random">
-    </label>
+    <button id="dungeon-settings" type="button">Dungeon settings</button>
     <button id="generate-dungeon" disabled>Generate dungeon</button>
     <button id="export-dungeon" disabled>Export RSVO</button>
     <button id="dungeon-flight" disabled>Fly (F)</button>
@@ -44,6 +41,29 @@
     <button id="shoot" disabled>Shoot ray (R)</button>
     <button id="clear-ray" disabled>Clear rays (C)</button>
   </header>
+
+  <dialog id="dungeon-options" aria-labelledby="dungeon-options-title">
+    <form id="dungeon-settings-form">
+      <h2 id="dungeon-options-title">Dungeon settings</h2>
+      <div class="dungeon-settings-fields">
+        <label>Seed <input id="dungeon-seed" type="number" min="0" max="4294967295" step="1" placeholder="Random"></label>
+        <label>Width (m) <input name="width" type="number" required></label>
+        <label>Length (m) <input name="length" type="number" required></label>
+        <label>Floors <input name="floors" type="number" required></label>
+        <label>Rooms <input name="roomCount" type="number" required></label>
+        <label>Min. room side (m) <input name="minRoomSize" type="number" required></label>
+        <label>Max. room side (m) <input name="maxRoomSize" type="number" required></label>
+        <label>Extra towers (%) <input name="towerPercent" type="number" required></label>
+        <label>Extra hallway loops (%) <input name="loopPercent" type="number" required></label>
+      </div>
+      <p>Leave Seed blank for a new layout each time. Set towers or loops to 0 to turn them off.</p>
+      <output id="dungeon-settings-error" role="alert"></output>
+      <div class="dungeon-settings-actions">
+        <button id="dungeon-settings-cancel" type="button">Cancel</button>
+        <button type="submit">Save settings</button>
+      </div>
+    </form>
+  </dialog>
 
   <main>
     <canvas id="view" aria-label="Voxel model raycast"></canvas>
