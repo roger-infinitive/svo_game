@@ -2,7 +2,8 @@ import { parseRsvo, sampleRsvo } from "./rsvo.ts";
 import { CameraOrientation } from "./camera-orientation.ts";
 import type { Octree } from "./rsvo.ts";
 import type { Dungeon } from "./dungeon/dungeon-generator.ts";
-import { dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
+import { compactDungeon } from "./dungeon/dungeon-recovery.ts";
+import { dungeonToRsvo, dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
 import { climbDirections, moveInDungeon } from "./dungeon/dungeon-walk.ts";
 import {
   defaultDungeonSettings, dungeonSettingLimits, floorHeight, validateDungeonSettings,
@@ -200,7 +201,7 @@ async function start() {
     dungeonFlight.textContent = flying ? "Walk (F)" : "Fly (F)";
     if (dungeon) {
       if (flying) {
-        status.value = `Dungeon ${dungeon.seed} · Flying`;
+        status.value = `Dungeon ${dungeon.seed} · Flying` + dungeonNote(dungeon);
       } else {
         stepCooldown = 0;
         syncDungeonCamera(dungeon);
@@ -225,7 +226,11 @@ async function start() {
     position[2] = (player.z + 0.5) * dungeonScale;
     const floor = 1 + Math.floor(player.y / floorHeight);
     status.value = `Dungeon ${layout.seed} · Floor ${floor} / ${layout.settings.floors}` +
-      climbDirections(layout, player);
+      climbDirections(layout, player) + dungeonNote(layout);
+  }
+
+  function dungeonNote(layout: Dungeon): string {
+    return layout.generationNote ? ` · ${layout.generationNote}` : "";
   }
 
   function requestTrace() {
@@ -323,23 +328,40 @@ async function start() {
   shoot.addEventListener("click", requestTrace);
   clearRay.addEventListener("click", clearTraces);
 
+  function openGeneratedDungeon(generated: { dungeon: Dungeon; buffer: ArrayBuffer }) {
+    const tree = parseRsvo(generated.buffer);
+    upload(tree, generated.dungeon);
+    dungeon = generated.dungeon;
+    dungeonScale = dungeonWorldScale(dungeon.settings);
+    dungeonBytes = generated.buffer;
+    depth.value = String(tree.depth);
+    level.value = depth.value;
+    exportDungeon.disabled = false;
+    dungeonFlight.disabled = false;
+    placeDungeonCamera();
+  }
+
   generate.addEventListener("click", async () => {
     const seed = dungeonSeed ?? crypto.getRandomValues(new Uint32Array(1))[0];
+    const requested = dungeonSettings;
     generate.disabled = true;
     file.disabled = true;
     status.value = "Generating dungeon…";
     try {
-      const generated = await buildDungeon(seed, dungeonSettings);
-      const tree = parseRsvo(generated.buffer);
-      upload(tree, generated.dungeon);
-      dungeon = generated.dungeon;
-      dungeonScale = dungeonWorldScale(dungeon.settings);
-      dungeonBytes = generated.buffer;
-      depth.value = String(tree.depth);
-      level.value = depth.value;
-      exportDungeon.disabled = false;
-      dungeonFlight.disabled = false;
-      placeDungeonCamera();
+      try {
+        openGeneratedDungeon(await buildDungeon(seed, requested));
+      } catch {
+        status.value = "Building a simpler dungeon…";
+        try {
+          openGeneratedDungeon(await buildDungeon(seed, requested, true));
+        } catch {
+          const emergency = { ...defaultDungeonSettings, floors: 1 };
+          const layout = compactDungeon(
+            seed, emergency, "Used one compact floor because the larger builds couldn't finish.",
+          );
+          openGeneratedDungeon({ dungeon: layout, buffer: dungeonToRsvo(layout) });
+        }
+      }
     } catch (error) {
       status.value = String(error);
     } finally {
@@ -656,20 +678,27 @@ async function start() {
 function buildDungeon(
   seed: number,
   settings: DungeonSettings,
+  compact = false,
 ): Promise<{ dungeon: Dungeon; buffer: ArrayBuffer }> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./dungeon/dungeon-worker.ts", import.meta.url), {
       type: "module",
     });
+    const timeout = setTimeout(() => {
+      worker.terminate();
+      reject(new Error("Dungeon generation timed out."));
+    }, compact ? 8000 : 30000);
     worker.onmessage = event => {
+      clearTimeout(timeout);
       worker.terminate();
       resolve(event.data);
     };
     worker.onerror = event => {
+      clearTimeout(timeout);
       worker.terminate();
       reject(new Error(event.message || "Dungeon generation failed."));
     };
-    worker.postMessage({ seed, settings });
+    worker.postMessage({ seed, settings, compact });
   });
 }
 

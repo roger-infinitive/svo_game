@@ -12,6 +12,7 @@ const routes = new Map([
   ["/src/dungeon/rooms.ts", ["src/dungeon/rooms.ts", "text/javascript"]],
   ["/src/dungeon/room-graph.ts", ["src/dungeon/room-graph.ts", "text/javascript"]],
   ["/src/dungeon/dungeon-generator.ts", ["src/dungeon/dungeon-generator.ts", "text/javascript"]],
+  ["/src/dungeon/dungeon-recovery.ts", ["src/dungeon/dungeon-recovery.ts", "text/javascript"]],
   ["/src/dungeon/dungeon-routing.ts", ["src/dungeon/dungeon-routing.ts", "text/javascript"]],
   ["/src/dungeon/room-openings.ts", ["src/dungeon/room-openings.ts", "text/javascript"]],
   ["/src/dungeon/stairs.ts", ["src/dungeon/stairs.ts", "text/javascript"]],

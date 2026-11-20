@@ -1,10 +1,11 @@
 import { gridDistance, routeHallway, stairKey } from "./dungeon-routing.ts";
+import { compactDungeon } from "./dungeon-recovery.ts";
 import { chooseHallways, delaunayEdges, minimumSpanningTree } from "./room-graph.ts";
 import type { RoomEdge } from "./room-graph.ts";
 import { carveRoomOpenings } from "./room-openings.ts";
 import type { RoomOpening } from "./room-openings.ts";
 import {
-  defaultDungeonSettings, gridKey, placeRooms, roomCenter, roomsOverlap, seededRandom,
+  defaultDungeonSettings, fitDungeonSettings, gridKey, placeRooms, roomCenter, roomsOverlap, seededRandom,
   validateDungeonSettings,
 } from "./rooms.ts";
 import type { DungeonRoom, DungeonSettings, GridPoint } from "./rooms.ts";
@@ -15,6 +16,7 @@ export { addGridPoints, gridDirections, insideDungeon } from "./dungeon-routing.
 
 export interface Dungeon {
   seed: number;
+  generationNote?: string;
   settings: DungeonSettings;
   rooms: DungeonRoom[];
   graph: RoomEdge[];
@@ -92,18 +94,60 @@ function roomClusters(rooms: DungeonRoom[], overlapsAllowed: boolean): number[] 
 
 export function generateDungeon(
   seed: number,
-  settings: DungeonSettings = defaultDungeonSettings,
+  requested: DungeonSettings = defaultDungeonSettings,
 ): Dungeon {
-  validateDungeonSettings(settings);
+  validateDungeonSettings(requested);
+  const settings = fitDungeonSettings(requested);
   const random = seededRandom(seed);
-  let rooms = placeRooms(random, settings);
-  for (let attempt = 0; rooms.length < settings.roomCount && attempt < 8; attempt++) {
-    rooms = placeRooms(random, settings);
-  }
-  if (rooms.length < settings.roomCount) {
-    throw new Error("Could not fit all rooms. Try a larger map, smaller rooms, or fewer rooms.");
+  let best: DungeonRoom[] = [];
+  for (let attempt = 0; attempt < 9; attempt++) {
+    const rooms = placeRooms(random, settings);
+    if (rooms.length > best.length) {
+      best = rooms;
+    }
+    if (rooms.length === settings.roomCount) {
+      break;
+    }
   }
 
+  const coveredFloors = new Set<number>();
+  for (const room of best) {
+    for (let floor = room.floor; floor < room.floor + room.floors; floor++) {
+      coveredFloors.add(floor);
+    }
+  }
+  if (coveredFloors.size === settings.floors) {
+    const actual = { ...settings, roomCount: best.length };
+    const adjusted = (Object.keys(actual) as (keyof DungeonSettings)[])
+      .some(key => actual[key] !== requested[key]);
+    try {
+      const dungeon = connectRooms(seed, actual, best, random);
+      if (adjusted) {
+        dungeon.generationNote = `Adjusted to fit: ${best.length} rooms on a ${actual.width} × ${actual.length} m map.`;
+      }
+      return dungeon;
+    } catch {
+      // The same room placement can be routable once stairs and optional
+      // loop paths no longer reserve the narrow stretches between rooms.
+      const simpler = { ...actual, stairsPercent: 0, loopPercent: 0 };
+      try {
+        const dungeon = connectRooms(seed, simpler, best, random);
+        dungeon.generationNote = `Used ladders and simpler connections to link ${best.length} rooms.`;
+        return dungeon;
+      } catch {
+        // Fall back to a layout with a guaranteed route between floors.
+      }
+    }
+  }
+  return compactDungeon(seed, settings, "Used a compact layout to keep all requested floors connected.");
+}
+
+function connectRooms(
+  seed: number,
+  settings: DungeonSettings,
+  rooms: DungeonRoom[],
+  random: () => number,
+): Dungeon {
   const keyFor = (point: GridPoint) => gridKey(point, settings);
   const graph = delaunayEdges(rooms, settings);
   const tree = minimumSpanningTree(rooms.length, graph);
@@ -190,6 +234,9 @@ export function generateDungeon(
       }
     }
     if (!path || !doors) {
+      if (addLoop) {
+        continue;
+      }
       throw new Error(`Could not carve a hallway between rooms ${edge.a + 1} and ${edge.b + 1}.`);
     }
     if (startTower) {

@@ -18,7 +18,7 @@ Towers favor separate entrances on different floors. **Tower connection target**
 
 **Hallway stairs (%)** controls how often hallway routes try stairs first. Walk up or down stairs with **W A S D**. Ladders still appear in towers and where a stair run won't fit. Set the percentage to **0** for ladder-only floor connections.
 
-Larger layouts can take longer to build and need more memory. If the rooms won't fit, try a wider map, smaller rooms, or fewer rooms.
+Larger layouts can take longer to build and need more memory. If the requested layout can't fit or finish, the viewer builds a simpler connected dungeon and shows what changed in the footer.
 
 Turn on **Allow overlapping rooms** to merge same-floor rooms into larger spaces. Towers keep their own footprints so their shafts and galleries stay open.
 

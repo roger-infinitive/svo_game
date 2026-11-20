@@ -86,23 +86,6 @@ export function validateDungeonSettings(settings: DungeonSettings) {
       throw new Error(`${key} must be a whole number ${range}.`);
     }
   }
-  if (settings.minRoomSize > settings.maxRoomSize) {
-    throw new Error("Minimum room size must be at most the maximum room size.");
-  }
-  if (settings.minTowerFloors > settings.maxTowerFloors) {
-    throw new Error("Minimum tower height must be at most the maximum tower height.");
-  }
-  if (!settings.fullHeightTowers && settings.towerPercent > 0 &&
-      settings.floors > 1 && settings.minTowerFloors > settings.floors) {
-    throw new Error("Minimum tower height needs to fit within the dungeon's floor count.");
-  }
-  if (Math.min(settings.width, settings.length) < settings.minRoomSize + 2) {
-    throw new Error("The smallest room needs to fit inside the map with space for a hallway on each side.");
-  }
-  if (settings.roomCount < settings.floors &&
-      !(settings.fullHeightTowers && settings.towerPercent > 0)) {
-    throw new Error("Add a room for each floor or enable full-height towers.");
-  }
   const span = Math.max(settings.width, settings.length, settings.floors * floorHeight);
   // RSVO stores at most 32 subdivisions. Each metre uses 5 of those bits.
   if (span > 2 ** 27) {
@@ -111,6 +94,29 @@ export function validateDungeonSettings(settings: DungeonSettings) {
   if (!Number.isSafeInteger(settings.width * settings.length * settings.floors)) {
     throw new Error("This map exceeds the exact grid address range.");
   }
+}
+
+export function fitDungeonSettings(requested: DungeonSettings): DungeonSettings {
+  const width = Math.max(5, requested.width);
+  const length = Math.max(5, requested.length);
+  const maxSide = Math.min(width, length) - 2;
+  const maxTowerHeight = Math.max(2, requested.floors);
+  const minRoomSize = Math.min(requested.minRoomSize, requested.maxRoomSize, maxSide);
+  const maxRoomSize = Math.min(Math.max(requested.minRoomSize, requested.maxRoomSize), maxSide);
+  const canSpanFloors = requested.fullHeightTowers && requested.towerPercent > 0;
+  const minRooms = canSpanFloors ? 1 : requested.floors;
+  const availableArea = (width - 2) * (length - 2) * requested.floors;
+  const capacity = requested.overlappingRooms ? availableArea : Math.floor(availableArea / minRoomSize ** 2);
+  return {
+    ...requested,
+    width,
+    length,
+    roomCount: Math.max(minRooms, Math.min(requested.roomCount, capacity)),
+    minRoomSize,
+    maxRoomSize,
+    minTowerFloors: Math.min(requested.minTowerFloors, requested.maxTowerFloors, maxTowerHeight),
+    maxTowerFloors: Math.min(Math.max(requested.minTowerFloors, requested.maxTowerFloors), maxTowerHeight),
+  };
 }
 
 export function gridKey(point: GridPoint, size: DungeonSize): number {

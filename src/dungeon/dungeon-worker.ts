@@ -1,10 +1,12 @@
 import { generateDungeon } from "./dungeon-generator.ts";
+import { compactDungeon } from "./dungeon-recovery.ts";
 import { dungeonToRsvo } from "./dungeon-voxels.ts";
 import type { DungeonSettings } from "./rooms.ts";
 
 interface DungeonRequest {
   seed: number;
   settings: DungeonSettings;
+  compact: boolean;
 }
 
 // The viewer loads this module as a dedicated worker.
@@ -14,8 +16,10 @@ const worker = self as unknown as {
 };
 
 worker.addEventListener("message", event => {
-  const { seed, settings } = event.data;
-  const dungeon = generateDungeon(seed, settings);
+  const { seed, settings, compact } = event.data;
+  const dungeon = compact
+    ? compactDungeon(seed, settings, "Used a compact layout because the larger build couldn't finish.")
+    : generateDungeon(seed, settings);
   const buffer = dungeonToRsvo(dungeon);
   worker.postMessage({ dungeon, buffer }, [buffer]);
 });
