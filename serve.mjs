@@ -6,6 +6,7 @@ const routes = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/style.css", ["style.css", "text/css"]],
   ["/src/main.ts", ["src/main.ts", "text/javascript"]],
+  ["/src/camera-orientation.ts", ["src/camera-orientation.ts", "text/javascript"]],
   ["/src/rsvo.ts", ["src/rsvo.ts", "text/javascript"]],
   ["/src/dungeon/a-star.ts", ["src/dungeon/a-star.ts", "text/javascript"]],
   ["/src/dungeon/rooms.ts", ["src/dungeon/rooms.ts", "text/javascript"]],

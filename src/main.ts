@@ -1,4 +1,5 @@
 import { parseRsvo, sampleRsvo } from "./rsvo.ts";
+import { CameraOrientation } from "./camera-orientation.ts";
 import type { Octree } from "./rsvo.ts";
 import type { Dungeon } from "./dungeon/dungeon-generator.ts";
 import { dungeonWorldScale } from "./dungeon/dungeon-voxels.ts";
@@ -41,16 +42,15 @@ const maxTraceCells = 64;
 const verticesPerBox = 24;
 const position = [4, 5.5, -5];
 const keys = new Set<string>();
-let yaw = 0;
-let pitch = -0.17;
+const orientation = new CameraOrientation();
+orientation.reset(-0.17);
 let dirty = true;
 
 function resetCamera() {
   position[0] = 4;
   position[1] = 5.5;
   position[2] = -5;
-  yaw = 0;
-  pitch = -0.17;
+  orientation.reset(-0.17);
   dirty = true;
 }
 
@@ -160,8 +160,7 @@ async function start() {
       return;
     }
     player = { ...dungeon.entrance, y: dungeon.entrance.y * floorHeight };
-    yaw = 0;
-    pitch = 0;
+    orientation.reset();
     setDungeonFlight(false);
   }
 
@@ -355,10 +354,22 @@ async function start() {
     dirty = true;
   }).observe(canvas);
 
-  canvas.addEventListener("click", () => {
-    void canvas.requestPointerLock()?.catch(error => {
+  canvas.addEventListener("click", async () => {
+    if (document.pointerLockElement === canvas) {
+      return;
+    }
+    try {
+      try {
+        await canvas.requestPointerLock({ unadjustedMovement: true });
+      } catch (error) {
+        if (!(error instanceof DOMException) || error.name !== "NotSupportedError") {
+          throw error;
+        }
+        await canvas.requestPointerLock();
+      }
+    } catch (error) {
       status.value = String(error);
-    });
+    }
   });
   window.addEventListener("keydown", event => {
     if (document.pointerLockElement !== canvas) {
@@ -390,16 +401,12 @@ async function start() {
     if (document.pointerLockElement !== canvas) {
       return;
     }
-    yaw += event.movementX * 0.0025;
-    pitch = Math.max(-1.56, Math.min(1.56, pitch - event.movementY * 0.0025));
+    orientation.turn(event.movementX * 0.0025, -event.movementY * 0.0025);
     dirty = true;
   });
 
   function updateCamera(deltaSeconds: number) {
-    const sinYaw = Math.sin(yaw);
-    const cosYaw = Math.cos(yaw);
-    const sinPitch = Math.sin(pitch);
-    const cosPitch = Math.cos(pitch);
+    const { forward: lookForward, right, up } = orientation.basis;
 
     const forward = Number(keys.has("KeyW")) - Number(keys.has("KeyS"));
     const side = Number(keys.has("KeyD")) - Number(keys.has("KeyA"));
@@ -408,8 +415,9 @@ async function start() {
     if (dungeon && !flying) {
       stepCooldown = Math.max(0, stepCooldown - deltaSeconds);
       if (deltaSeconds > 0 && stepCooldown === 0 && (forward || side || vertical)) {
-        const facingX = Math.abs(sinYaw) > Math.abs(cosYaw) ? Math.sign(sinYaw) : 0;
-        const facingZ = facingX === 0 ? Math.sign(cosYaw) : 0;
+        const [lookX, , lookZ] = lookForward;
+        const facingX = Math.abs(lookX) > Math.abs(lookZ) ? Math.sign(lookX) : 0;
+        const facingZ = facingX === 0 ? Math.sign(lookZ) : 0;
         const direction = vertical
           ? { x: 0, y: vertical, z: 0 }
           : forward
@@ -425,21 +433,16 @@ async function start() {
     } else {
       const speed = dungeon ? 2 * dungeonWorldScale : 4;
       const step = speed * deltaSeconds / (Math.hypot(forward, side, vertical) || 1);
-      position[0] += (forward * sinYaw * cosPitch + side * cosYaw) * step;
-      position[1] += (forward * sinPitch + vertical) * step;
-      position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
+      position[0] += (forward * lookForward[0] + side * right[0]) * step;
+      position[1] += (forward * lookForward[1] + vertical) * step;
+      position[2] += (forward * lookForward[2] + side * right[2]) * step;
     }
 
     // The first vec4 stores the camera position and the LOD threshold.
     uniforms.set(position, 0);
-    uniforms[4] = sinYaw * cosPitch;
-    uniforms[5] = sinPitch;
-    uniforms[6] = cosYaw * cosPitch;
-    uniforms[8] = cosYaw;
-    uniforms[10] = -sinYaw;
-    uniforms[12] = -sinYaw * sinPitch;
-    uniforms[13] = cosPitch;
-    uniforms[14] = -cosYaw * sinPitch;
+    uniforms.set(lookForward, 4);
+    uniforms.set(right, 8);
+    uniforms.set(up, 12);
   }
 
   function render() {
