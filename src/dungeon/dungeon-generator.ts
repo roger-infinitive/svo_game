@@ -1,6 +1,8 @@
 import { gridDistance, routeHallway, stairKey } from "./dungeon-routing.ts";
 import { chooseHallways, delaunayEdges, minimumSpanningTree } from "./room-graph.ts";
 import type { RoomEdge } from "./room-graph.ts";
+import { carveRoomOpenings } from "./room-openings.ts";
+import type { RoomOpening } from "./room-openings.ts";
 import {
   defaultDungeonSettings, gridKey, placeRooms, roomCenter, roomsOverlap, seededRandom,
   validateDungeonSettings,
@@ -22,6 +24,7 @@ export interface Dungeon {
   walkable: Map<number, GridPoint>;
   verticalLinks: Set<number>;
   stairs: DungeonStair[];
+  openings: RoomOpening[];
   entrance: GridPoint;
 }
 
@@ -242,9 +245,12 @@ export function generateDungeon(
   }
 
   const entranceRoom = rooms.find(room => room.floor === 0 && room.floors === 1) ?? rooms[0];
+  const entrance = roomCenter(entranceRoom);
+  const openings = carveRoomOpenings(settings, rooms, walkable, hallways, entrance, random);
   return {
     seed, settings, rooms, graph, tree, hallways, roomSpace, walkable, verticalLinks,
     stairs: [...stairs.values()],
-    entrance: roomCenter(entranceRoom),
+    openings,
+    entrance,
   };
 }

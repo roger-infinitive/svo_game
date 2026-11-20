@@ -25,6 +25,8 @@ export interface DungeonSize {
 export interface DungeonSettings extends DungeonSize {
   roomCount: number;
   overlappingRooms: boolean;
+  roomOpeningPercent: number;
+  fullOpeningPercent: number;
   minRoomSize: number;
   maxRoomSize: number;
   towerPercent: number;
@@ -42,6 +44,8 @@ export const defaultDungeonSettings: DungeonSettings = {
   floors: 3,
   roomCount: 15,
   overlappingRooms: false,
+  roomOpeningPercent: 0,
+  fullOpeningPercent: 35,
   minRoomSize: 6,
   maxRoomSize: 9,
   towerPercent: 22,
@@ -58,6 +62,8 @@ export const dungeonSettingLimits = {
   length: [1],
   floors: [1],
   roomCount: [1],
+  roomOpeningPercent: [0, 100],
+  fullOpeningPercent: [0, 100],
   minRoomSize: [3],
   maxRoomSize: [3],
   towerPercent: [0, 100],
@@ -130,10 +136,13 @@ function separated(a: DungeonRoom, b: DungeonRoom): boolean {
 
 export function roomsOverlap(a: DungeonRoom, b: DungeonRoom): boolean {
   return (
-    a.floors === 1 && b.floors === 1 && a.floor === b.floor &&
-    a.x < b.x + b.width && b.x < a.x + a.width &&
-    a.z < b.z + b.length && b.z < a.z + a.length
+    a.floors === 1 && b.floors === 1 && a.floor === b.floor && footprintsOverlap(a, b)
   );
+}
+
+export function footprintsOverlap(a: DungeonRoom, b: DungeonRoom): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width &&
+    a.z < b.z + b.length && b.z < a.z + a.length;
 }
 
 export function placeRooms(random: () => number, settings: DungeonSettings): DungeonRoom[] {
@@ -165,13 +174,37 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
         roomFloors += randomInt(maxTowerFloors - minTowerFloors + 1);
       }
     }
+
+    const lowerRooms = roomFloors === 1 && settings.roomOpeningPercent > 0
+      ? rooms.filter(other => other.floors === 1 && other.floor === floor - 1)
+      : [];
+    const anchor = lowerRooms.length > 0 && randomInt(2) === 0
+      ? lowerRooms[randomInt(lowerRooms.length)]
+      : undefined;
+
     for (let attempt = 0; attempt < 400; attempt++) {
-      const roomWidth = minRoomSize + randomInt(widestRoom - minRoomSize + 1);
-      const roomLength = minRoomSize + randomInt(longestRoom - minRoomSize + 1);
+      const stack = attempt === 0 ? anchor : undefined;
+      let roomWidth = minRoomSize + randomInt(widestRoom - minRoomSize + 1);
+      let roomLength = minRoomSize + randomInt(longestRoom - minRoomSize + 1);
+      if (stack) {
+        roomWidth = Math.max(roomWidth, Math.min(widestRoom, stack.width + 2));
+        roomLength = Math.max(roomLength, Math.min(longestRoom, stack.length + 2));
+      }
+      let x: number;
+      let z: number;
+      if (stack) {
+        const centeredX = stack.x - Math.floor((roomWidth - stack.width) / 2);
+        const centeredZ = stack.z - Math.floor((roomLength - stack.length) / 2);
+        x = Math.max(xMargin, Math.min(width - roomWidth - xMargin, centeredX));
+        z = Math.max(zMargin, Math.min(length - roomLength - zMargin, centeredZ));
+      } else {
+        x = xMargin + randomInt(width - roomWidth - 2 * xMargin + 1);
+        z = zMargin + randomInt(length - roomLength - 2 * zMargin + 1);
+      }
       const room = {
         id,
-        x: xMargin + randomInt(width - roomWidth - 2 * xMargin + 1),
-        z: zMargin + randomInt(length - roomLength - 2 * zMargin + 1),
+        x,
+        z,
         floor,
         width: roomWidth,
         length: roomLength,
@@ -181,6 +214,10 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
       const center = roomCenter(room);
       if (rooms.every(other => {
         if (separated(room, other)) {
+          return true;
+        }
+        if (settings.roomOpeningPercent > 0 && room.floors === 1 && other.floors === 1 &&
+            Math.abs(room.floor - other.floor) === 1 && footprintsOverlap(room, other)) {
           return true;
         }
         if (!settings.overlappingRooms || !roomsOverlap(room, other)) {
