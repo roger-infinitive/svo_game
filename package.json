@@ -1,0 +1,13 @@
+{
+  "name": "svo-ts-raycaster",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.mjs",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.64",
+    "typescript": "^5.9.3"
+  }
+}

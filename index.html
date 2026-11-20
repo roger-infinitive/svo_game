@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SVO Raycaster</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>SVO Raycaster</h1>
+    <label>
+      Open RSVO
+      <input id="file" type="file" accept=".rsvo" disabled>
+    </label>
+    <label>
+      Depth
+      <input id="depth" type="range" min="1" max="8" value="6">
+      <output id="level">6</output>
+    </label>
+    <label>
+      Resolution
+      <select id="resolution">
+        <option value="auto" selected>Auto</option>
+        <option value="0.5">50%</option>
+        <option value="0.75">75%</option>
+        <option value="1">100%</option>
+      </select>
+    </label>
+    <button id="reset">Reset camera</button>
+  </header>
+
+  <main>
+    <canvas id="view" aria-label="Voxel model raycast"></canvas>
+  </main>
+
+  <footer>
+    <output id="status" role="status">Initializing WebGPU…</output>
+    <span>Click to look · WASD to move · Space / Shift to ascend / descend · Esc to release</span>
+    <output id="fps"></output>
+  </footer>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
