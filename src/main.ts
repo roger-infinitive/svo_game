@@ -10,6 +10,8 @@ const lod = document.querySelector<HTMLInputElement>("#lod")!;
 const lodValue = document.querySelector<HTMLOutputElement>("#lod-value")!;
 const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
 const reset = document.querySelector<HTMLButtonElement>("#reset")!;
+const shoot = document.querySelector<HTMLButtonElement>("#shoot")!;
+const clearRay = document.querySelector<HTMLButtonElement>("#clear-ray")!;
 const fps = document.querySelector<HTMLOutputElement>("#fps")!;
 const gpuInfo = document.querySelector<HTMLOutputElement>("#gpu-info")!;
 const gpuTime = document.querySelector<HTMLOutputElement>("#gpu-time")!;
@@ -26,6 +28,8 @@ const movementKeys = new Set([
 const autoPixelBudget = 1280 * 720;
 const fixedRenderWidth = 640;
 const fixedRenderHeight = 360;
+const maxTraceCells = 64;
+const verticesPerBox = 24;
 const position = [4, 5.5, -5];
 const keys = new Set<string>();
 let yaw = 0;
@@ -67,6 +71,8 @@ async function start() {
   void device.lost.then(({ message }) => {
     status.value = "GPU device lost. Reload the page. " + message;
     file.disabled = true;
+    shoot.disabled = true;
+    clearRay.disabled = true;
   });
 
   const context = canvas.getContext("webgpu");
@@ -86,19 +92,62 @@ async function start() {
     throw new Error(errors.map(error => error.message).join("\n"));
   }
 
-  const pipeline = await device.createRenderPipelineAsync({
-    layout: "auto",
-    vertex: { module, entryPoint: "vertex" },
-    fragment: { module, entryPoint: "fragment", targets: [{ format }] },
-  });
+  const [pipeline, tracePipeline, gizmoPipeline] = await Promise.all([
+    device.createRenderPipelineAsync({
+      layout: "auto",
+      vertex: { module, entryPoint: "vertex" },
+      fragment: { module, entryPoint: "fragment", targets: [{ format }] },
+    }),
+    device.createComputePipelineAsync({
+      layout: "auto",
+      compute: { module, entryPoint: "shootRay" },
+    }),
+    device.createRenderPipelineAsync({
+      layout: "auto",
+      vertex: { module, entryPoint: "gizmoVertex" },
+      fragment: { module, entryPoint: "gizmoFragment", targets: [{ format }] },
+      primitive: { topology: "line-list" },
+    }),
+  ]);
   const uniforms = new Float32Array(20);
   const cameraBuffer = device.createBuffer({
     size: uniforms.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
+  const traceUniforms = new Float32Array(uniforms.length);
+  const traceCameraBuffer = device.createBuffer({
+    size: traceUniforms.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
 
   let buffers: GPUBuffer[] = [];
   let group: GPUBindGroup;
+  let modelEntries: GPUBindGroupEntry[] = [];
+  const pendingTraces: { camera: Float32Array; depth: number }[] = [];
+  const savedTraces: { buffer: GPUBuffer; group: GPUBindGroup }[] = [];
+
+  function requestTrace() {
+    updateCamera(0);
+    const camera = uniforms.slice(0, 16);
+    camera[3] = Number(lod.value);
+    pendingTraces.push({ camera, depth: Number(depth.value) });
+
+    const count = pendingTraces.length + savedTraces.length;
+    clearRay.textContent = `Clear rays (C) · ${count}`;
+    clearRay.disabled = false;
+    dirty = true;
+  }
+
+  function clearTraces() {
+    pendingTraces.length = 0;
+    for (const trace of savedTraces) {
+      trace.buffer.destroy();
+    }
+    savedTraces.length = 0;
+    clearRay.textContent = "Clear rays (C)";
+    clearRay.disabled = true;
+    dirty = true;
+  }
 
   function upload(tree: Octree) {
     const split = Math.ceil(tree.masks.length / 2);
@@ -130,13 +179,15 @@ async function start() {
         );
         buffer.unmap();
       }
+      const entries = next.map((buffer, index) => ({
+        binding: index + 1,
+        resource: { buffer },
+      }));
       group = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
-        entries: [cameraBuffer, ...next].map((buffer, binding) => ({
-          binding,
-          resource: { buffer },
-        })),
+        entries: [{ binding: 0, resource: { buffer: cameraBuffer } }, ...entries],
       });
+      modelEntries = entries;
     } catch (error) {
       next.forEach(buffer => buffer.destroy());
       throw error;
@@ -147,13 +198,16 @@ async function start() {
     depth.max = String(tree.depth);
     depth.value = String(Math.min(8, tree.depth));
     level.value = depth.value;
-    dirty = true;
+    clearTraces();
   }
 
   const sample = parseRsvo(sampleRsvo());
   upload(sample);
   status.value = "Sample torus";
   file.disabled = false;
+  shoot.disabled = false;
+  shoot.addEventListener("click", requestTrace);
+  clearRay.addEventListener("click", clearTraces);
 
   file.addEventListener("change", async () => {
     const model = file.files?.[0];
@@ -202,6 +256,10 @@ async function start() {
     if (movementKeys.has(event.code)) {
       keys.add(event.code);
       event.preventDefault();
+    } else if (event.code === "KeyR" && !event.repeat) {
+      requestTrace();
+    } else if (event.code === "KeyC" && !event.repeat) {
+      clearTraces();
     }
   });
   window.addEventListener("keyup", event => {
@@ -288,6 +346,42 @@ async function start() {
     device.queue.writeBuffer(cameraBuffer, 0, uniforms);
 
     const encoder = device.createCommandEncoder();
+    const shot = pendingTraces.shift();
+    if (shot) {
+      traceUniforms.set(uniforms);
+      traceUniforms.set(shot.camera);
+      traceUniforms[19] = shot.depth;
+      device.queue.writeBuffer(traceCameraBuffer, 0, traceUniforms);
+
+      const traceBuffer = device.createBuffer({
+        // Two vec4f ray endpoints followed by one vec4f per occupied cell.
+        size: (2 + maxTraceCells) * 16,
+        usage: GPUBufferUsage.STORAGE,
+      });
+      const traceGroup = device.createBindGroup({
+        layout: tracePipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: traceCameraBuffer } },
+          ...modelEntries,
+          { binding: 4, resource: { buffer: traceBuffer } },
+        ],
+      });
+      const tracePass = encoder.beginComputePass();
+      tracePass.setPipeline(tracePipeline);
+      tracePass.setBindGroup(0, traceGroup);
+      tracePass.dispatchWorkgroups(1);
+      tracePass.end();
+
+      const gizmoGroup = device.createBindGroup({
+        layout: gizmoPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: cameraBuffer } },
+          { binding: 5, resource: { buffer: traceBuffer } },
+        ],
+      });
+      savedTraces.push({ buffer: traceBuffer, group: gizmoGroup });
+    }
+
     const timestampWrites = gpuTimer?.beginSample();
     const pass = encoder.beginRenderPass({
       timestampWrites,
@@ -303,6 +397,13 @@ async function start() {
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, group);
     pass.draw(3);
+    if (savedTraces.length > 0) {
+      pass.setPipeline(gizmoPipeline);
+      for (const trace of savedTraces) {
+        pass.setBindGroup(0, trace.group);
+        pass.draw(2 + (1 + maxTraceCells) * verticesPerBox);
+      }
+    }
     pass.end();
     if (timestampWrites) {
       gpuTimer?.resolveSample(encoder);
@@ -330,7 +431,7 @@ async function start() {
 
     if (dirty && !frameInFlight) {
       render();
-      dirty = false;
+      dirty = pendingTraces.length > 0;
       frameInFlight = true;
 
       // Keep the next frame available for the newest camera position.

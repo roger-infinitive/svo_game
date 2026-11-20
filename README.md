@@ -20,4 +20,4 @@ Choose **Open RSVO** to load a model, including `data/render_me.rsvo` from the n
 
 Append `?profile=1` to the viewer URL to show sampled GPU render-pass time in milliseconds on adapters that support timestamp queries. Move the camera to generate samples. The timing covers the WebGPU render pass, including ray traversal and shading.
 
-The port covers the active GPU rendering path, RSVO imports, fly controls, and depth adjustment. The old mesh renderer and CPU raycast gizmos are outside the current port.
+Press **R** while looking around or click **Shoot ray** to capture a 12-unit ray from the camera. Each shot traces once using the rendering shader's traversal and saves up to 64 occupied cells. The overlay keeps every shot until you press **C**, click **Clear rays**, or load another model. The first occupied cell of each ray is green. Move sideways to view the rays from an angle.

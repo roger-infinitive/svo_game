@@ -16,13 +16,28 @@ struct Frame {
 
 struct Hit {
   t: f32,
+  exit: f32,
   normal: vec3f,
+  cell: vec4f,
+}
+
+struct TraceRecords {
+  start: vec4f,
+  end: vec4f,
+  cells: array<vec4f>,
+}
+
+struct GizmoVertex {
+  @builtin(position) position: vec4f,
+  @location(0) color: vec3f,
 }
 
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> masks: array<u32>;
 @group(0) @binding(2) var<storage, read> childBase: array<u32>;
 @group(0) @binding(3) var<storage, read> childBaseHigh: array<u32>;
+@group(0) @binding(4) var<storage, read_write> traceOutput: TraceRecords;
+@group(0) @binding(5) var<storage, read> trace: TraceRecords;
 
 fn firstChild(node: u32) -> u32 {
   let split = arrayLength(&childBase);
@@ -44,8 +59,8 @@ fn octantAt(middle: vec3f, position: vec3f) -> u32 {
   return u32(high.x) | (u32(high.y) << 1u) | (u32(high.z) << 2u);
 }
 
-fn raycast(origin: vec3f, direction: vec3f) -> Hit {
-  let miss = Hit(-1.0, vec3f(0));
+fn raycast(origin: vec3f, direction: vec3f, start: f32) -> Hit {
+  let miss = Hit(-1.0, -1.0, vec3f(0), vec4f(0));
 
   // Reflect negative axes so every ray walks from low to high octants.
   let negative = direction < vec3f(0);
@@ -65,7 +80,7 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
   let far = (vec3f(8) - p) * inv;
   let rootMiddle = (vec3f(4) - p) * inv;
   var axis = maxAxis(near);
-  var t = max(0.0, near[axis]);
+  var t = max(start, near[axis]);
   let rootExit = select(far, vec3f(1e30), parallel);
   if (t >= min(rootExit.x, min(rootExit.y, rootExit.z))) {
     return miss;
@@ -102,7 +117,9 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
       if (level + 1u == depth || belowPixelThreshold) {
         var normal = vec3f(0);
         normal[axis] = select(-1.0, 1.0, negative[axis]);
-        return Hit(t, normal);
+        let reflectedFar = round((p + childFar / inv) / size) * size;
+        let corner = select(reflectedFar - size, vec3f(8) - reflectedFar, negative);
+        return Hit(t, exit, normal, vec4f(corner, size));
       }
 
       let middle = childFar - size * 0.5 * inv;
@@ -145,9 +162,79 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
   let direction = camera.forward.xyz
     + camera.right.xyz * ndc.x * camera.viewport.z
     + camera.up.xyz * ndc.y;
-  let hit = raycast(camera.positionAndLod.xyz, direction);
+  let hit = raycast(camera.positionAndLod.xyz, direction, 0.0);
   if (hit.t < 0.0) {
     return vec4f(0.07, 0.08, 0.1, 1);
   }
   return vec4f(0.5 * (hit.normal + 1.0), 1);
+}
+
+@compute @workgroup_size(1)
+fn shootRay() {
+  let origin = camera.positionAndLod.xyz;
+  let direction = camera.forward.xyz;
+  let rayLength = 12.0;
+  traceOutput.start = vec4f(origin, 1.0);
+  traceOutput.end = vec4f(origin + direction * rayLength, 1.0);
+
+  // Reuse the first-hit traversal, resuming at each occupied cell's exit.
+  let capacity = arrayLength(&traceOutput.cells);
+  var start = 0.0;
+  var count = 0u;
+  while (count < capacity && start < rayLength) {
+    let hit = raycast(origin, direction, start);
+    if (hit.t < 0.0 || hit.t >= rayLength) {
+      break;
+    }
+    traceOutput.cells[count] = hit.cell;
+    count++;
+    start = hit.exit;
+  }
+  for (var i = count; i < capacity; i++) {
+    traceOutput.cells[i] = vec4f(0);
+  }
+}
+
+fn boxVertex(cell: vec4f, vertexIndex: u32) -> vec3f {
+  let corners = array(
+    0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u,
+    0u, 2u, 1u, 3u, 4u, 6u, 5u, 7u,
+    0u, 4u, 1u, 5u, 2u, 6u, 3u, 7u,
+  );
+  let bits = vec3u(corners[vertexIndex]) & vec3u(1u, 2u, 4u);
+  let corner = select(vec3f(0), vec3f(1), bits != vec3u(0));
+  return cell.xyz + corner * cell.w;
+}
+
+@vertex
+fn gizmoVertex(@builtin(vertex_index) i: u32) -> GizmoVertex {
+  var point: vec3f;
+  var color: vec3f;
+  if (i < 2u) {
+    point = select(trace.start.xyz, trace.end.xyz, i == 1u);
+    color = vec3f(1.0, 0.77, 0.23);
+  } else if (i < 26u) {
+    point = boxVertex(vec4f(0, 0, 0, 8), i - 2u);
+    color = vec3f(0.56, 0.65, 0.76);
+  } else {
+    // Draw the first hit last so neighboring boxes cannot cover its edges.
+    let index = ((i - 26u) / 24u + 1u) % arrayLength(&trace.cells);
+    let cell = trace.cells[index];
+    if (cell.w == 0.0) {
+      return GizmoVertex(vec4f(2, 2, 0, 1), vec3f(0));
+    }
+    point = boxVertex(cell, (i - 26u) % 24u);
+    color = select(vec3f(0.2, 0.83, 1.0), vec3f(0.43, 1.0, 0.29), index == 0u);
+  }
+
+  let relative = point - camera.positionAndLod.xyz;
+  let z = dot(relative, camera.forward.xyz);
+  let x = dot(relative, camera.right.xyz) / camera.viewport.z;
+  let y = dot(relative, camera.up.xyz);
+  return GizmoVertex(vec4f(x, y, z - 0.01, z), color);
+}
+
+@fragment
+fn gizmoFragment(input: GizmoVertex) -> @location(0) vec4f {
+  return vec4f(input.color, 1);
 }
