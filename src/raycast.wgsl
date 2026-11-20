@@ -1,5 +1,5 @@
 struct Camera {
-  position: vec4f,
+  positionAndLod: vec4f,
   forward: vec4f,
   right: vec4f,
   up: vec4f,
@@ -78,6 +78,10 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
   var level = 0u;
   var size = 4.0;
   let depth = u32(camera.viewport.w);
+  let lodPixels = camera.positionAndLod.w;
+  // The camera ray advances one unit along camera-forward for each unit of t.
+  // At a 90-degree vertical FOV, projected cell size is size * halfHeight / t.
+  let halfHeight = 0.5 * camera.viewport.y;
 
   loop {
     let frame = frames[level];
@@ -94,7 +98,8 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
 
     // Descend into an occupied child that the ray actually crosses.
     if (exit > t && (mask & bit) != 0u) {
-      if (level + 1u == depth) {
+      let belowPixelThreshold = size * halfHeight <= t * lodPixels;
+      if (level + 1u == depth || belowPixelThreshold) {
         var normal = vec3f(0);
         normal[axis] = select(-1.0, 1.0, negative[axis]);
         return Hit(t, normal);
@@ -140,7 +145,7 @@ fn raycast(origin: vec3f, direction: vec3f) -> Hit {
   let direction = camera.forward.xyz
     + camera.right.xyz * ndc.x * camera.viewport.z
     + camera.up.xyz * ndc.y;
-  let hit = raycast(camera.position.xyz, direction);
+  let hit = raycast(camera.positionAndLod.xyz, direction);
   if (hit.t < 0.0) {
     return vec4f(0.07, 0.08, 0.1, 1);
   }

@@ -6,9 +6,13 @@ const status = document.querySelector<HTMLOutputElement>("#status")!;
 const file = document.querySelector<HTMLInputElement>("#file")!;
 const depth = document.querySelector<HTMLInputElement>("#depth")!;
 const level = document.querySelector<HTMLOutputElement>("#level")!;
+const lod = document.querySelector<HTMLInputElement>("#lod")!;
+const lodValue = document.querySelector<HTMLOutputElement>("#lod-value")!;
 const resolution = document.querySelector<HTMLSelectElement>("#resolution")!;
 const reset = document.querySelector<HTMLButtonElement>("#reset")!;
 const fps = document.querySelector<HTMLOutputElement>("#fps")!;
+const gpuInfo = document.querySelector<HTMLOutputElement>("#gpu-info")!;
+const gpuTime = document.querySelector<HTMLOutputElement>("#gpu-time")!;
 const movementKeys = new Set([
   "KeyW",
   "KeyA",
@@ -20,6 +24,8 @@ const movementKeys = new Set([
 ]);
 
 const autoPixelBudget = 1280 * 720;
+const fixedRenderWidth = 640;
+const fixedRenderHeight = 360;
 const position = [4, 5.5, -5];
 const keys = new Set<string>();
 let yaw = 0;
@@ -42,9 +48,22 @@ async function start() {
     throw new Error("WebGPU is unavailable in this browser.");
   }
   const { maxBufferSize, maxStorageBufferBindingSize } = adapter.limits;
+  const profiling = new URLSearchParams(location.search).get("profile") === "1";
+  const timestampSupported = profiling && adapter.features.has("timestamp-query");
   const device = await adapter.requestDevice({
     requiredLimits: { maxBufferSize, maxStorageBufferBindingSize },
+    requiredFeatures: timestampSupported ? ["timestamp-query"] : [],
   });
+  if (profiling) {
+    gpuInfo.hidden = false;
+    gpuTime.hidden = false;
+    gpuTime.value = timestampSupported ? "GPU timing pending" : "GPU timestamps unavailable";
+  }
+
+  const gpuTimer = timestampSupported ? createGpuTimer(device) : undefined;
+  const adapterInfo = profiling ? adapter.info : undefined;
+  const adapterName = adapterInfo?.description || adapterInfo?.vendor || "Unknown GPU";
+  const adapterLabel = adapterInfo?.isFallbackAdapter ? adapterName + " (fallback)" : adapterName;
   void device.lost.then(({ message }) => {
     status.value = "GPU device lost. Reload the page. " + message;
     file.disabled = true;
@@ -159,6 +178,10 @@ async function start() {
     level.value = depth.value;
     dirty = true;
   });
+  lod.addEventListener("input", () => {
+    lodValue.value = lod.value;
+    dirty = true;
+  });
   resolution.addEventListener("change", () => {
     dirty = true;
   });
@@ -213,7 +236,7 @@ async function start() {
     position[1] += (forward * sinPitch + vertical) * step;
     position[2] += (forward * cosYaw * cosPitch - side * sinYaw) * step;
 
-    // The shader reads position, forward, right, and up as four vec4s.
+    // The first vec4 stores the camera position and the LOD threshold.
     uniforms.set(position, 0);
     uniforms[4] = sinYaw * cosPitch;
     uniforms[5] = sinPitch;
@@ -226,29 +249,48 @@ async function start() {
   }
 
   function render() {
-    const cssPixels = Math.max(1, canvas.clientWidth * canvas.clientHeight);
-    const scale = resolution.value === "auto"
-      ? Math.min(1, Math.sqrt(autoPixelBudget / cssPixels))
-      : Number(resolution.value) * Math.min(devicePixelRatio, 2);
+    const displayWidth = Math.max(1, canvas.clientWidth);
+    const displayHeight = Math.max(1, canvas.clientHeight);
+    const cssPixels = displayWidth * displayHeight;
+    const fixedResolution = resolution.value === "fixed";
+    let scale = 1;
+    if (resolution.value === "auto") {
+      scale = Math.min(1, Math.sqrt(autoPixelBudget / cssPixels));
+    } else if (!fixedResolution) {
+      scale = Number(resolution.value) * devicePixelRatio;
+    }
     const limit = device.limits.maxTextureDimension2D;
-    const width = Math.max(1, Math.min(limit, Math.round(canvas.clientWidth * scale)));
-    const height = Math.max(1, Math.min(limit, Math.round(canvas.clientHeight * scale)));
+    const width = fixedResolution
+      ? fixedRenderWidth
+      : Math.max(1, Math.min(limit, Math.round(displayWidth * scale)));
+    const height = fixedResolution
+      ? fixedRenderHeight
+      : Math.max(1, Math.min(limit, Math.round(displayHeight * scale)));
     if (canvas.width !== width) {
       canvas.width = width;
     }
     if (canvas.height !== height) {
       canvas.height = height;
     }
+    if (profiling) {
+      const profileInfo = adapterLabel + " · " + width + " × " + height;
+      if (gpuInfo.value !== profileInfo) {
+        gpuInfo.value = profileInfo;
+      }
+    }
 
     // The final vec4 stores viewport size, aspect ratio, and traversal depth.
     uniforms[16] = width;
     uniforms[17] = height;
-    uniforms[18] = width / height;
+    uniforms[18] = displayWidth / displayHeight;
     uniforms[19] = Number(depth.value);
+    uniforms[3] = Number(lod.value);
     device.queue.writeBuffer(cameraBuffer, 0, uniforms);
 
     const encoder = device.createCommandEncoder();
+    const timestampWrites = gpuTimer?.beginSample();
     const pass = encoder.beginRenderPass({
+      timestampWrites,
       colorAttachments: [
         {
           view: context!.getCurrentTexture().createView(),
@@ -262,7 +304,13 @@ async function start() {
     pass.setBindGroup(0, group);
     pass.draw(3);
     pass.end();
+    if (timestampWrites) {
+      gpuTimer?.resolveSample(encoder);
+    }
     device.queue.submit([encoder.finish()]);
+    if (timestampWrites) {
+      gpuTimer?.readSample();
+    }
   }
 
   let previous = performance.now();
@@ -309,6 +357,51 @@ async function start() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+}
+
+function createGpuTimer(device: GPUDevice) {
+  const querySet = device.createQuerySet({ type: "timestamp", count: 2 });
+  const size = 2 * BigUint64Array.BYTES_PER_ELEMENT;
+  const resolved = device.createBuffer({
+    size,
+    usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+  });
+  const readback = device.createBuffer({
+    size,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  let pending = false;
+  let nextSample = 0;
+
+  return {
+    beginSample(): GPURenderPassTimestampWrites | undefined {
+      const now = performance.now();
+      if (pending || now < nextSample) {
+        return undefined;
+      }
+      pending = true;
+      nextSample = now + 250;
+      return { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 };
+    },
+
+    resolveSample(encoder: GPUCommandEncoder) {
+      encoder.resolveQuerySet(querySet, 0, 2, resolved, 0);
+      encoder.copyBufferToBuffer(resolved, 0, readback, 0, size);
+    },
+
+    readSample() {
+      void readback.mapAsync(GPUMapMode.READ).then(() => {
+        const [start, end] = new BigUint64Array(readback.getMappedRange());
+        readback.unmap();
+        gpuTime.value = end >= start
+          ? (Number(end - start) / 1e6).toFixed(2) + " ms GPU pass"
+          : "GPU timestamp sample invalid";
+        pending = false;
+      }, () => {
+        gpuTime.value = "GPU timestamp readback failed";
+      });
+    },
+  };
 }
 
 void start().catch(error => {
