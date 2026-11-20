@@ -12,6 +12,8 @@ Explore voxel models in your browser. The viewer starts with a sample torus and 
 
 Click **Dungeon settings** to change the map width and length, floors, room count and size, towers, or hallway loops. Save the settings, then click **Generate dungeon**. Leave **Seed** empty for a different layout each time, or enter a seed and use the same settings to repeat a layout.
 
+Turn on **Full-height towers** to extend towers from the bottom floor to the top. Keep **Extra towers** above zero to enable towers.
+
 Larger layouts can take longer to build and need more memory. If the rooms won't fit, try a wider map, smaller rooms, or fewer rooms.
 
 Click the viewer and use **W A S D** to move one metre at a time. Floors are two metres apart. Use **Space** or **Shift** at a brown ladder to climb one metre at a time. The footer shows your floor and tells you when you can climb.

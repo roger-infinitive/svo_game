@@ -27,6 +27,7 @@ export interface DungeonSettings extends DungeonSize {
   minRoomSize: number;
   maxRoomSize: number;
   towerPercent: number;
+  fullHeightTowers: boolean;
   loopPercent: number;
 }
 
@@ -38,6 +39,7 @@ export const defaultDungeonSettings: DungeonSettings = {
   minRoomSize: 6,
   maxRoomSize: 9,
   towerPercent: 22,
+  fullHeightTowers: false,
   loopPercent: 12,
 };
 
@@ -50,10 +52,10 @@ export const dungeonSettingLimits = {
   maxRoomSize: [3],
   towerPercent: [0, 100],
   loopPercent: [0, 100],
-} as const satisfies Record<keyof DungeonSettings, readonly [number, number?]>;
+} as const satisfies Record<Exclude<keyof DungeonSettings, "fullHeightTowers">, readonly [number, number?]>;
 
 export function validateDungeonSettings(settings: DungeonSettings) {
-  for (const key of Object.keys(dungeonSettingLimits) as (keyof DungeonSettings)[]) {
+  for (const key of Object.keys(dungeonSettingLimits) as (keyof typeof dungeonSettingLimits)[]) {
     const [min, max]: readonly [number, number?] = dungeonSettingLimits[key];
     const value = settings[key];
     if (!Number.isSafeInteger(value) || value < min || (max !== undefined && value > max)) {
@@ -67,8 +69,9 @@ export function validateDungeonSettings(settings: DungeonSettings) {
   if (Math.min(settings.width, settings.length) < settings.minRoomSize + 2) {
     throw new Error("The smallest room needs to fit inside the map with space for a hallway on each side.");
   }
-  if (settings.roomCount < settings.floors) {
-    throw new Error("Add at least one room per floor.");
+  if (settings.roomCount < settings.floors &&
+      !(settings.fullHeightTowers && settings.towerPercent > 0)) {
+    throw new Error("Add a room for each floor or enable full-height towers.");
   }
   const span = Math.max(settings.width, settings.length, settings.floors * floorHeight);
   // RSVO stores at most 32 subdivisions. Each metre uses 5 of those bits.
@@ -105,7 +108,7 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
   const rooms: DungeonRoom[] = [];
   const randomInt = (limit: number) => Math.floor(random() * limit);
   const { roomCount, minRoomSize, maxRoomSize, width, length, floors, towerPercent } = settings;
-  const hasTower = floors > 1 && towerPercent > 0 && roomCount > floors;
+  const hasTower = floors > 1 && towerPercent > 0 && (roomCount > floors || settings.fullHeightTowers);
   const reservedRooms = floors + Number(hasTower);
   const xMargin = width >= minRoomSize + 4 ? 2 : 1;
   const zMargin = length >= minRoomSize + 4 ? 2 : 1;
@@ -113,9 +116,11 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
   const longestRoom = Math.min(maxRoomSize, length - 2 * zMargin);
 
   for (let id = 0; id < roomCount; id++) {
-    const floor = id < reservedRooms ? Math.max(0, id - Number(hasTower)) : randomInt(floors);
+    const startFloor = id < reservedRooms ? Math.max(0, id - Number(hasTower)) : randomInt(floors);
     const isTower = (hasTower && id === 0) ||
-      (id >= reservedRooms && floor < floors - 1 && randomInt(100) < towerPercent);
+      (id >= reservedRooms && startFloor < floors - 1 && randomInt(100) < towerPercent);
+    const fullHeight = isTower && settings.fullHeightTowers;
+    const floor = fullHeight ? 0 : startFloor;
     for (let attempt = 0; attempt < 400; attempt++) {
       const roomWidth = minRoomSize + randomInt(widestRoom - minRoomSize + 1);
       const roomLength = minRoomSize + randomInt(longestRoom - minRoomSize + 1);
@@ -126,7 +131,7 @@ export function placeRooms(random: () => number, settings: DungeonSettings): Dun
         floor,
         width: roomWidth,
         length: roomLength,
-        floors: isTower ? 2 : 1,
+        floors: fullHeight ? floors : isTower ? 2 : 1,
       };
 
       if (rooms.every(other => separated(room, other))) {

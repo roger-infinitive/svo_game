@@ -18,6 +18,7 @@ const settingsDialog = document.querySelector<HTMLDialogElement>("#dungeon-optio
 const settingsForm = document.querySelector<HTMLFormElement>("#dungeon-settings-form")!;
 const settingsCancel = document.querySelector<HTMLButtonElement>("#dungeon-settings-cancel")!;
 const settingsError = document.querySelector<HTMLOutputElement>("#dungeon-settings-error")!;
+const fullHeightTowers = document.querySelector<HTMLInputElement>("#full-height-towers")!;
 const generate = document.querySelector<HTMLButtonElement>("#generate-dungeon")!;
 const exportDungeon = document.querySelector<HTMLButtonElement>("#export-dungeon")!;
 const dungeonFlight = document.querySelector<HTMLButtonElement>("#dungeon-flight")!;
@@ -54,7 +55,7 @@ orientation.reset(-0.17);
 let dungeonSettings = { ...defaultDungeonSettings };
 let dungeonSeed: number | undefined;
 
-const settingKeys = Object.keys(dungeonSettingLimits) as (keyof DungeonSettings)[];
+const settingKeys = Object.keys(dungeonSettingLimits) as (keyof typeof dungeonSettingLimits)[];
 const settingFields = settingKeys.map(key => {
   const input = settingsForm.elements.namedItem(key) as HTMLInputElement;
   const [min, max]: readonly [number, number?] = dungeonSettingLimits[key];
@@ -67,6 +68,7 @@ const settingFields = settingKeys.map(key => {
 
 settingsButton.addEventListener("click", () => {
   seedInput.value = dungeonSeed === undefined ? "" : String(dungeonSeed);
+  fullHeightTowers.checked = dungeonSettings.fullHeightTowers;
   for (const { key, input } of settingFields) {
     input.value = String(dungeonSettings[key]);
   }
@@ -79,6 +81,7 @@ settingsCancel.addEventListener("click", () => settingsDialog.close());
 settingsForm.addEventListener("submit", event => {
   event.preventDefault();
   const next = { ...dungeonSettings };
+  next.fullHeightTowers = fullHeightTowers.checked;
   for (const { key, input } of settingFields) {
     next[key] = input.valueAsNumber;
   }

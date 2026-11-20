@@ -73,7 +73,7 @@ input[type=range] {
   justify-content: space-between;
 }
 
-.dungeon-settings-fields input {
+.dungeon-settings-fields input[type=number] {
   width: 9rem;
   min-width: 0;
   padding: .3rem;
